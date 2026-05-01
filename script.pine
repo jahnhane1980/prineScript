@@ -1,1 +1,101 @@
-# script
+//@version=5
+indicator("Cycle Intelligence V32 - Global Oracle", overlay=true, max_boxes_count=500, max_labels_count=500)
+
+// --- 1. SETTINGS & ASSET CATEGORIES ---
+asset_type = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"], tooltip="A=Growth, B=Idx, C=BTC, D=Miner, E=Momo, F=Bonds/TLT")
+manual_underlying = input.symbol("TVC:SILVER", "Vergleichs-Asset (für Typ D/C/F)", tooltip="Wähle das passende Underlying (z.B. Silver für Miner, BTC für Crypto-Miner)")
+
+// --- 2. GLOBAL MACRO DATA RECOVERY ---
+vix    = request.security("CBOE:VIX", "D", close)
+move   = request.security("INDEX:MOVE", "D", close)
+dxy    = request.security("TVC:DXY", "D", close)
+fed    = request.security("FRED:WALCL", "W", close)
+wti    = request.security("TVC:USOIL", "D", close)
+under_price = request.security(manual_underlying, "D", close)
+
+// --- 3. ADAPTIVE WMA CYCLE ENGINE (3-2-1 WEIGHTING) ---
+s_per_bar = timeframe.in_seconds()
+tf_scale  = 86400 / s_per_bar
+var int[] c_hist = array.new_int(0)
+var int last_low_idx = 0
+int base_len = asset_type == "F" ? 42 : asset_type == "C" ? 40 : asset_type == "D" ? 32 : 35
+var int dynamic_len = math.round(base_len * tf_scale)
+
+p_low = ta.pivotlow(low, 10, 10)
+if not na(p_low)
+    if last_low_idx != 0
+        array.push(c_hist, bar_index - last_low_idx)
+        if array.size(c_hist) > 3 then array.remove(c_hist, 0)
+        if array.size(c_hist) == 3
+            dynamic_len := math.round((array.get(c_hist, 2)*3 + array.get(c_hist, 1)*2 + array.get(c_hist, 0)) / 6)
+    last_low_idx := bar_index
+
+// --- 4. PEAK-POSITION & TRANSLATION ANALYSIS ---
+bars_since_low = bar_index - last_low_idx
+high_since_low = ta.highest(high, math.max(1, bars_since_low))
+int peak_bar = na
+for i = 0 to bars_since_low
+    if high[i] == high_since_low
+        peak_bar := bar_index - i
+        break
+
+float peak_pos_pct = (peak_bar - last_low_idx) / dynamic_len
+string trans_info = peak_pos_pct < 0.5 ? " (bärisch / LT)" : " (bullisch / RT)"
+color trans_col = peak_pos_pct < 0.5 ? color.red : color.green
+
+// --- 5. SNIPER PHYSICS & VETO SYSTEM ---
+rsi2 = ta.rsi(close, 2)
+ema8 = ta.ema(close, 8)
+[_, _, bb_l4] = ta.bollinger(close, 20, 4)
+rel_vol = (volume / ta.sma(volume, 20)) * 100
+
+// Veto 1: Falling Knife
+is_falling_knife = ((ta.change(close) / ta.atr(14)) * -1) > 2.2
+
+// Veto 2: Relative Schwäche (Miner Stagnation)
+lookback = 5
+rel_weakness_veto = (asset_type == "D" or asset_type == "C") and (ta.roc(under_price, lookback) > 1.0) and (ta.roc(close, lookback) < 0.2)
+
+// Veto 3: Bond Panic (Typ F)
+bond_panic_ok = asset_type == "F" ? move > 110 : true
+
+// --- 6. TRIGGER LOGIK & ALERTS ---
+in_window = bars_since_low > dynamic_len * 0.8 and bars_since_low < dynamic_len * 1.2
+strike_t3 = in_window and close < bb_l4 and not is_falling_knife and not rel_weakness_veto and bond_panic_ok
+
+// Alert Matrix
+if strike_t3
+    alert(syminfo.ticker + "; " + str.tostring(close) + "; T3 STRIKE; " + str.tostring(peak_pos_pct*100, "#") + "%", alert.freq_once_per_bar)
+
+bool lt_warning = bars_since_low > dynamic_len * 0.5 and peak_pos_pct < 0.45 and ta.crossunder(close, ema8)
+if lt_warning
+    alert("VORSICHT: " + syminfo.ticker + " Left Translated" + trans_info + "! Peak bei " + str.tostring(peak_pos_pct*100, "#") + "%.", alert.freq_once_per_bar)
+
+// --- 7. VISUALISIERUNG (LABELS & DASHBOARD) ---
+// Institutional Flow (Dark Pool Proxy)
+inst_absorption = (volume > ta.sma(volume, 50) * 1.8) and (high - low < ta.sma(high - low, 50) * 0.8)
+bgcolor(inst_absorption ? color.new(color.purple, 90) : na)
+
+// Peak & Strike Labels
+if ta.change(peak_bar) != 0
+    label.new(peak_bar, high, "PEAK: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info, color=trans_col, textcolor=color.white, style=label.style_label_down)
+
+if strike_t3
+    label.new(bar_index, low, "STRIKE T3\n" + asset_type, color=color.green, textcolor=color.white, style=label.style_label_up)
+
+if rel_weakness_veto
+    label.new(bar_index, high, "VETO: Rel. Schwäche\n(Partial Exit prüfen)", color=color.orange, textcolor=color.black, style=label.style_label_down)
+
+// Dashboard
+var table db = table.new(position.top_right, 1, 1, border_width=1)
+if barstate.islast
+    msg = "!!! ORACLE V32 !!!\n" +
+          "Typ: " + asset_type + "\n" +
+          "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info + "\n" +
+          "Zyklus: " + str.tostring((bars_since_low/dynamic_len)*100, "#") + "%\n" +
+          "VIX: " + str.tostring(vix, "#.#") + " | MOVE: " + str.tostring(move, "#.#")
+    table.cell(db, 0, 0, msg, bgcolor=trans_col, text_color=color.white)
+
+// Cycle Box
+if not na(last_low_idx) and bar_index < last_low_idx + dynamic_len * 1.2
+    box.new(last_low_idx + math.round(dynamic_len * 0.85), high * 1.02, last_low_idx + math.round(dynamic_len * 1.15), low * 0.98, bgcolor=color.new(color.gray, 95), border_style=line.style_dotted)
