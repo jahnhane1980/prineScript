@@ -1,11 +1,19 @@
 //@version=5
-indicator("Cycle Intelligence - Dual-Cycle UI V35.0", overlay=true, max_boxes_count=500, max_labels_count=500)
+indicator("Cycle Intelligence - Adaptive Integrated V35.4", overlay=true, max_boxes_count=500, max_labels_count=500)
 
-// --- 1. SETTINGS ---
-asset_type = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"])
+// --- 1. SETTINGS & INPUTS ---
+asset_type        = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"])
 manual_underlying = input.symbol("TVC:SILVER", "Vergleichs-Asset")
+rsi_len           = input.int(14, "RSI Länge (RSA)")
+show_boxes        = input.bool(true, "Prognose-Boxen anzeigen")
 
-// --- 2. ENGINE & SCALING ---
+// --- 2. GLOBAL INDICATOR NESTING (Regel 3: Bestandsschutz) ---
+vix         = request.security("CBOE:VIX", "D", close)
+move        = request.security("TVC:MOVE", "D", close)
+under_price = request.security(manual_underlying, "D", close)
+rsa_val     = ta.rsi(close, rsi_len)
+
+// --- 3. ADAPTIVE ENGINE & SCALING ---
 s_per_bar = timeframe.in_seconds()
 tf_scale  = 86400 / s_per_bar
 int p_len_d = math.max(2, math.round(10 * tf_scale))
@@ -18,14 +26,32 @@ var int dynamic_len = math.round(base_len * tf_scale)
 var box[] d_boxes = array.new_box()
 var box[] w_boxes = array.new_box()
 
-// --- 3. DAILY ENGINE (CYCLES & DIAMONDS) ---
+// Speicher für Label-Kollisionsprüfung
+var label last_d_label = na
+var int last_d_bar = 0
+
+// --- 4. ADAPTIVE PROJECTION LOGIC ---
+// Berechnet die Box-Grenzen basierend auf der Peak-Position (Zündschnur-Adaption)
+get_adaptive_offsets(float peak_pct) =>
+    float left  = 0.0
+    float right = 0.0
+    if peak_pct > 1.2      // Massive RT Übertreibung
+        left := 1.25, right := 1.60
+    else if peak_pct > 0.8 // Normale RT
+        left := 1.05, right := 1.35
+    else if peak_pct < 0.4 // Left Translation
+        left := 0.65, right := 0.95
+    else                   // Standard
+        left := 0.85, right := 1.15
+    [left, right]
+
+// --- 5. DAILY ENGINE ---
 p_low = ta.pivotlow(low, p_len_d, p_len_d)
 
 if not na(p_low)
     int current_low_idx = bar_index - p_len_d
     
     if last_low_idx != 0
-        // Den höchsten Punkt zwischen dem letzten und dem aktuellen Tief finden
         float max_h = -1.0
         int peak_bar = last_low_idx
         for i = (bar_index - current_low_idx) to (bar_index - last_low_idx)
@@ -33,30 +59,29 @@ if not na(p_low)
                 max_h := high[i]
                 peak_bar := bar_index - i
         
-        // Prozentuale Position berechnen
         float peak_pos_pct = (peak_bar - last_low_idx) / dynamic_len
-        
-        // Farbe bestimmen
         color p_col = peak_pos_pct < 0.5 ? color.fuchsia : peak_pos_pct > 1.8 ? color.red : peak_pos_pct > 1.4 ? color.orange : color.aqua
         
-        // DIAMANT & PROZENT ZEICHNEN
+        // DIAMANT & PROZENT
         string p_txt = "◆\n" + str.tostring(peak_pos_pct * 100, "#") + "%"
         label.new(peak_bar, max_h + (ta.atr(14) * 0.5), text=p_txt, color=color.new(color.white, 100), textcolor=p_col, style=label.style_none, size=size.normal)
         
-        // DAILY DREIECK (D)
-        float tri_pos_pct = (peak_bar - last_low_idx) / dynamic_len
-        color tri_col = tri_pos_pct < 0.5 ? color.orange : color.blue
-        label.new(current_low_idx, low[p_len_d] - nz(ta.atr(14)[p_len_d]) * 0.8, text="D", style=label.style_triangleup, color=tri_col, textcolor=color.white, size=size.tiny)
+        // DAILY TEXT-MARKIERUNG (D)
+        color tri_col = peak_pos_pct < 0.5 ? color.orange : color.blue
+        last_d_label := label.new(current_low_idx, low[p_len_d] - nz(ta.atr(14)[p_len_d]) * 1.5, text="D", color=color.new(color.white, 100), textcolor=tri_col, style=label.style_none, size=size.large)
+        last_d_bar := current_low_idx
         
-        // PROGNOSE BOX
-        box b_d = box.new(last_low_idx + math.round(dynamic_len * 0.85), high * 1.02, last_low_idx + math.round(dynamic_len * 1.15), low * 0.98, bgcolor=color.new(color.white, 50), border_style=line.style_dotted)
-        array.push(d_boxes, b_d)
-        if array.size(d_boxes) > 3
-            box.delete(array.shift(d_boxes))
+        // ADAPTIVE PROGNOSE BOX (D)
+        if show_boxes
+            [box_l, box_r] = get_adaptive_offsets(peak_pos_pct)
+            box b_d = box.new(last_low_idx + math.round(dynamic_len * box_l), high * 1.02, last_low_idx + math.round(dynamic_len * box_r), low * 0.98, bgcolor=color.new(color.white, 80), border_style=line.style_dotted)
+            array.push(d_boxes, b_d)
+            if array.size(d_boxes) > 3
+                box.delete(array.shift(d_boxes))
             
     last_low_idx := current_low_idx
 
-// --- 4. WEEKLY ENGINE ---
+// --- 6. WEEKLY ENGINE ---
 var int last_low_idx_wk = 0
 p_low_wk = ta.pivotlow(low, p_len_w, p_len_w)
 int dynamic_len_wk = dynamic_len * 3
@@ -65,7 +90,6 @@ if not na(p_low_wk)
     int actual_pivot_bar = bar_index - p_len_w
     
     if last_low_idx_wk != 0
-        // Peak für Weekly bestimmen (für Dreiecksfarbe)
         float max_h_wk = -1.0
         int peak_bar_wk = last_low_idx_wk
         for i = (bar_index - actual_pivot_bar) to (bar_index - last_low_idx_wk)
@@ -73,25 +97,37 @@ if not na(p_low_wk)
                 max_h_wk := high[i]
                 peak_bar_wk := bar_index - i
         
-        float finished_peak_pct_wk = (peak_bar_wk - last_low_idx_wk) / dynamic_len_wk
-        color tri_col_wk = finished_peak_pct_wk < 0.5 ? color.red : color.green
+        float peak_pos_pct_wk = (peak_bar_wk - last_low_idx_wk) / dynamic_len_wk
+        color tri_col_wk = peak_pos_pct_wk < 0.5 ? color.red : color.green
         
-        // WEEKLY DREIECK (W)
-        label.new(actual_pivot_bar, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 4.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.small)
+        // WEEKLY TEXT-MARKIERUNG (W)
+        float w_y_pos = low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 4.5
         
-        // WEEKLY PROGNOSE BOX
-        box b_w = box.new(last_low_idx_wk + math.round(dynamic_len_wk * 0.85), high * 1.05, last_low_idx_wk + math.round(dynamic_len_wk * 1.15), low * 0.95, bgcolor=color.new(color.blue, 50), border_style=line.style_dashed)
-        array.push(w_boxes, b_w)
-        if array.size(w_boxes) > 3
-            box.delete(array.shift(w_boxes))
+        if actual_pivot_bar == last_d_bar
+            label.set_x(last_d_label, actual_pivot_bar - 2)
+            label.new(actual_pivot_bar + 2, w_y_pos, text="W", color=color.new(color.white, 100), textcolor=tri_col_wk, style=label.style_none, size=size.large)
+        else
+            label.new(actual_pivot_bar, w_y_pos, text="W", color=color.new(color.white, 100), textcolor=tri_col_wk, style=label.style_none, size=size.large)
+        
+        // ADAPTIVE WEEKLY PROGNOSE BOX
+        if show_boxes
+            [box_l_wk, box_r_wk] = get_adaptive_offsets(peak_pos_pct_wk)
+            box b_w = box.new(last_low_idx_wk + math.round(dynamic_len_wk * box_l_wk), high * 1.05, last_low_idx_wk + math.round(dynamic_len_wk * box_r_wk), low * 0.95, bgcolor=color.new(color.blue, 80), border_style=line.style_dashed)
+            array.push(w_boxes, b_w)
+            if array.size(w_boxes) > 3
+                box.delete(array.shift(w_boxes))
             
     last_low_idx_wk := actual_pivot_bar
 
-// --- 5. DASHBOARD ---
-var table db = table.new(position.top_right, 1, 1, border_width=1)
+// --- 7. DASHBOARD ---
+var table db = table.new(position.top_right, 2, 4, border_width=1, border_color=color.gray)
 if barstate.islast
-    // Berechnung für den laufenden Zyklus (Live)
-    float live_bars = bar_index - last_low_idx
-    float live_peak_pct = live_bars / dynamic_len
-    msg = "!!! ORACLE !!!\n" + "Status: Aktiv\n" + "Live Peak Pos: " + str.tostring(live_peak_pct * 100, "#") + "%"
-    table.cell(db, 0, 0, msg, bgcolor=color.silver, text_color=color.black, text_size=size.small)
+    table.cell(db, 0, 0, "RSA (RSI):", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 0, str.tostring(rsa_val, "#.##"), bgcolor=rsa_val > 70 ? color.new(color.red, 50) : rsa_val < 30 ? color.new(color.green, 50) : color.silver)
+    table.cell(db, 0, 1, "VIX Index:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 1, str.tostring(vix, "#.##"), bgcolor=vix > 20 ? color.new(color.orange, 50) : color.silver)
+    table.cell(db, 0, 2, "MOVE Index:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 2, str.tostring(move, "#.##"), bgcolor=color.silver)
+    float live_peak_pct = (bar_index - last_low_idx) / dynamic_len
+    table.cell(db, 0, 3, "Live Peak:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 3, str.tostring(live_peak_pct * 100, "#") + "%", bgcolor=color.silver)
