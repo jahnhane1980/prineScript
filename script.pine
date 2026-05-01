@@ -1,10 +1,10 @@
 //@version=5
-indicator("Cycle Intelligence - Dual-Cycle UI V34.2", overlay=true, max_boxes_count=500, max_labels_count=500)
+indicator("Cycle Intelligence - Dual-Cycle UI V34.3", overlay=true, max_boxes_count=500, max_labels_count=500)
 
 // --- 1. SETTINGS ---
 asset_type = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"])
 manual_underlying = input.symbol("TVC:SILVER", "Vergleichs-Asset")
-anchor_time = input.time(timestamp("2022-12-01 00:00"), "Makro-Anker Datum")
+anchor_time = input.time(timestamp("2022-12-01 00:00"), "Makro-Anker Datum (Tag 0)")
 macro_target = input.int(4, "Weekly-Zyklen pro Makro-Zyklus", minval=1)
 
 // --- 2. DATA ---
@@ -18,19 +18,22 @@ tf_scale  = 86400 / s_per_bar
 int p_len_d = math.max(2, math.round(10 * tf_scale))
 int p_len_w = math.max(3, math.round(30 * tf_scale))
 
-var int[] c_hist = array.new_int(0)
 var int last_low_idx = 0
 int base_len = asset_type == "F" ? 42 : asset_type == "C" ? 40 : asset_type == "D" ? 32 : 35
 var int dynamic_len = math.round(base_len * tf_scale)
 
 var label current_peak_lbl = na
-
-// NUR NOCH BOXEN WERDEN LIMITIERT
 var box[] d_boxes = array.new_box()
 var box[] w_boxes = array.new_box()
 
 var int weekly_count_since_anchor = 0
 var int last_macro_idx = na
+var bool anchor_marked = false
+
+// --- ANCHOR MARKER (TAG 0) ---
+if not anchor_marked and time >= anchor_time
+    label.new(bar_index, low - nz(ta.atr(14)) * 6.0, text="MACRO START\n(Anker)", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.small)
+    anchor_marked := true
 
 // --- DAILY ENGINE ---
 p_low = ta.pivotlow(low, p_len_d, p_len_d)
@@ -46,25 +49,17 @@ if not na(p_low)
         float finished_peak_pct = (p_bar - last_low_idx) / dynamic_len
         color tri_col = finished_peak_pct < 0.5 ? color.orange : color.blue
         
-        // Dreieck (BLEIBT BESTEHEN)
         label.new(bar_index - p_len_d, low[p_len_d] - nz(ta.atr(14)[p_len_d]) * 0.8, text="D", style=label.style_triangleup, color=tri_col, textcolor=color.white, size=size.tiny)
             
-        // BOX (WIRD LIMITIERT AUF 3)
         box b_d = box.new(last_low_idx + math.round(dynamic_len * 0.85), high * 1.02, last_low_idx + math.round(dynamic_len * 1.15), low * 0.98, bgcolor=color.new(color.white, 50), border_style=line.style_dotted)
         array.push(d_boxes, b_d)
         if array.size(d_boxes) > 3
             box.delete(array.shift(d_boxes))
 
-    if last_low_idx != 0
-        array.push(c_hist, bar_index - last_low_idx)
-        if array.size(c_hist) > 3
-            array.remove(c_hist, 0)
-        if array.size(c_hist) == 3
-            dynamic_len := math.round((array.get(c_hist, 2)*3 + array.get(c_hist, 1)*2 + array.get(c_hist, 0)) / 6)
     last_low_idx := bar_index
     current_peak_lbl := na
 
-// --- WEEKLY ENGINE ---
+// --- WEEKLY ENGINE & HARMONIC MACRO ---
 var int last_low_idx_wk = 0
 p_low_wk = ta.pivotlow(low, p_len_w, p_len_w)
 int dynamic_len_wk = dynamic_len * 3
@@ -73,9 +68,11 @@ if not na(p_low_wk)
     int actual_pivot_bar = bar_index - p_len_w
     if time[p_len_w] >= anchor_time
         weekly_count_since_anchor += 1
+        
+        // Markiere jeden Makro-Abschluss (z.B. den 4. Weekly-Boden)
         if weekly_count_since_anchor % macro_target == 0
             last_macro_idx := actual_pivot_bar
-            label.new(last_macro_idx, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 8.0, text="MACRO\n(Zyklus " + str.tostring(weekly_count_since_anchor) + ")", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.small)
+            label.new(last_macro_idx, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 8.0, text="MACRO CYCLE\nEND", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.small)
 
     if last_low_idx_wk != 0
         float max_h_wk = -1.0
@@ -88,10 +85,8 @@ if not na(p_low_wk)
         float finished_peak_pct_wk = (p_bar_wk - last_low_idx_wk) / dynamic_len_wk
         color tri_col_wk = finished_peak_pct_wk < 0.5 ? color.red : color.green
         
-        // Dreieck (BLEIBT BESTEHEN)
         label.new(actual_pivot_bar, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 4.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.small)
             
-        // BOX (WIRD LIMITIERT AUF 3)
         box b_w = box.new(last_low_idx_wk + math.round(dynamic_len_wk * 0.85), high * 1.05, last_low_idx_wk + math.round(dynamic_len_wk * 1.15), low * 0.95, bgcolor=color.new(color.blue, 50), border_style=line.style_dashed)
         array.push(w_boxes, b_w)
         if array.size(w_boxes) > 3
@@ -127,15 +122,15 @@ if ta.change(peak_bar) != 0
 var table db = table.new(position.top_right, 1, 1, border_width=1)
 if barstate.islast
     string dash_trans = peak_pos_pct < 0.5 ? " (LT)" : " (RT)"
-    msg = "!!! ORACLE !!!\n" + "Typ: " + asset_type + "\n" + "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + dash_trans + "\n" + "Zyklus: " + str.tostring((bars_since_low/dynamic_len)*100, "#") + "%\n" + "W-Count: " + str.tostring(weekly_count_since_anchor % macro_target) + "/" + str.tostring(macro_target)
+    msg = "!!! ORACLE !!!\n" + "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + dash_trans + "\n" + "W-Count: " + str.tostring(weekly_count_since_anchor % macro_target) + "/" + str.tostring(macro_target)
     table.cell(db, 0, 0, msg, bgcolor=color.silver, text_color=color.black, text_size=size.small)
 
-// --- MACRO TARGET ---
+// --- FUTURE TARGET CALCULATION ---
 if barstate.islast and last_low_idx_wk != 0
     int cycles_remaining = macro_target - (weekly_count_since_anchor % macro_target)
-    if cycles_remaining == macro_target
-        cycles_remaining := 0
-    if cycles_remaining > 0
-        int next_macro_idx = last_low_idx_wk + (cycles_remaining * dynamic_len_wk)
-        if next_macro_idx > bar_index
-            label.new(next_macro_idx, low, "TARGET\nMACRO", style=label.style_arrowup, color=color.new(color.yellow, 50), textcolor=color.gray, size=size.small)
+    // Wenn wir genau auf einem Makro-Ende sind, zeigen wir den nächsten kompletten Zyklus
+    int calc_cycles = cycles_remaining <= 0 ? macro_target : cycles_remaining
+    int next_macro_idx = last_low_idx_wk + (calc_cycles * dynamic_len_wk)
+    
+    if next_macro_idx > bar_index
+        label.new(next_macro_idx, low, "TARGET\nMACRO", style=label.style_arrowup, color=color.new(color.yellow, 50), textcolor=color.gray, size=size.small)
