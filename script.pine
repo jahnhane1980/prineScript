@@ -1,5 +1,5 @@
 //@version=5
-indicator("Cycle Intelligence - Adaptive Integrated V35.4", overlay=true, max_boxes_count=500, max_labels_count=500)
+indicator("Cycle Intelligence - Adaptive Integrated V35.6", overlay=true, max_boxes_count=500, max_labels_count=500)
 
 // --- 1. SETTINGS & INPUTS ---
 asset_type        = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"])
@@ -26,12 +26,10 @@ var int dynamic_len = math.round(base_len * tf_scale)
 var box[] d_boxes = array.new_box()
 var box[] w_boxes = array.new_box()
 
-// Speicher für Label-Kollisionsprüfung
 var label last_d_label = na
 var int last_d_bar = 0
 
 // --- 4. ADAPTIVE PROJECTION LOGIC ---
-// Berechnet die Box-Grenzen basierend auf der Peak-Position (Zündschnur-Adaption)
 get_adaptive_offsets(float peak_pct) =>
     float left  = 0.0
     float right = 0.0
@@ -50,7 +48,6 @@ p_low = ta.pivotlow(low, p_len_d, p_len_d)
 
 if not na(p_low)
     int current_low_idx = bar_index - p_len_d
-    
     if last_low_idx != 0
         float max_h = -1.0
         int peak_bar = last_low_idx
@@ -62,16 +59,13 @@ if not na(p_low)
         float peak_pos_pct = (peak_bar - last_low_idx) / dynamic_len
         color p_col = peak_pos_pct < 0.5 ? color.fuchsia : peak_pos_pct > 1.8 ? color.red : peak_pos_pct > 1.4 ? color.orange : color.aqua
         
-        // DIAMANT & PROZENT
         string p_txt = "◆\n" + str.tostring(peak_pos_pct * 100, "#") + "%"
         label.new(peak_bar, max_h + (ta.atr(14) * 0.5), text=p_txt, color=color.new(color.white, 100), textcolor=p_col, style=label.style_none, size=size.normal)
         
-        // DAILY TEXT-MARKIERUNG (D)
         color tri_col = peak_pos_pct < 0.5 ? color.orange : color.blue
         last_d_label := label.new(current_low_idx, low[p_len_d] - nz(ta.atr(14)[p_len_d]) * 1.5, text="D", color=color.new(color.white, 100), textcolor=tri_col, style=label.style_none, size=size.large)
         last_d_bar := current_low_idx
         
-        // ADAPTIVE PROGNOSE BOX (D)
         if show_boxes
             [box_l, box_r] = get_adaptive_offsets(peak_pos_pct)
             box b_d = box.new(last_low_idx + math.round(dynamic_len * box_l), high * 1.02, last_low_idx + math.round(dynamic_len * box_r), low * 0.98, bgcolor=color.new(color.white, 80), border_style=line.style_dotted)
@@ -88,28 +82,23 @@ int dynamic_len_wk = dynamic_len * 3
 
 if not na(p_low_wk)
     int actual_pivot_bar = bar_index - p_len_w
-    
     if last_low_idx_wk != 0
         float max_h_wk = -1.0
         int peak_bar_wk = last_low_idx_wk
         for i = (bar_index - actual_pivot_bar) to (bar_index - last_low_idx_wk)
             if high[i] > max_h_wk
-                max_h_wk := high[i]
-                peak_bar_wk := bar_index - i
+                max_h_wk := high[i], peak_bar_wk := bar_index - i
         
         float peak_pos_pct_wk = (peak_bar_wk - last_low_idx_wk) / dynamic_len_wk
         color tri_col_wk = peak_pos_pct_wk < 0.5 ? color.red : color.green
         
-        // WEEKLY TEXT-MARKIERUNG (W)
         float w_y_pos = low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 4.5
-        
         if actual_pivot_bar == last_d_bar
             label.set_x(last_d_label, actual_pivot_bar - 2)
             label.new(actual_pivot_bar + 2, w_y_pos, text="W", color=color.new(color.white, 100), textcolor=tri_col_wk, style=label.style_none, size=size.large)
         else
             label.new(actual_pivot_bar, w_y_pos, text="W", color=color.new(color.white, 100), textcolor=tri_col_wk, style=label.style_none, size=size.large)
         
-        // ADAPTIVE WEEKLY PROGNOSE BOX
         if show_boxes
             [box_l_wk, box_r_wk] = get_adaptive_offsets(peak_pos_pct_wk)
             box b_w = box.new(last_low_idx_wk + math.round(dynamic_len_wk * box_l_wk), high * 1.05, last_low_idx_wk + math.round(dynamic_len_wk * box_r_wk), low * 0.95, bgcolor=color.new(color.blue, 80), border_style=line.style_dashed)
@@ -119,15 +108,25 @@ if not na(p_low_wk)
             
     last_low_idx_wk := actual_pivot_bar
 
-// --- 7. DASHBOARD ---
-var table db = table.new(position.top_right, 2, 4, border_width=1, border_color=color.gray)
+// --- 7. DASHBOARD (Mit Spacer-Zeile für vertikalen Abstand) ---
+// Wir erhöhen auf 5 Zeilen: Zeile 0 ist der Spacer.
+var table db = table.new(position.top_center, 2, 5, border_width=1, border_color=color.gray)
+
 if barstate.islast
-    table.cell(db, 0, 0, "RSA (RSI):", text_color=color.white, bgcolor=color.black)
-    table.cell(db, 1, 0, str.tostring(rsa_val, "#.##"), bgcolor=rsa_val > 70 ? color.new(color.red, 50) : rsa_val < 30 ? color.new(color.green, 50) : color.silver)
-    table.cell(db, 0, 1, "VIX Index:", text_color=color.white, bgcolor=color.black)
-    table.cell(db, 1, 1, str.tostring(vix, "#.##"), bgcolor=vix > 20 ? color.new(color.orange, 50) : color.silver)
-    table.cell(db, 0, 2, "MOVE Index:", text_color=color.white, bgcolor=color.black)
-    table.cell(db, 1, 2, str.tostring(move, "#.##"), bgcolor=color.silver)
+    // Zeile 0: Unsichtbarer Spacer (Pusht die Tabelle nach unten)
+    table.cell(db, 0, 0, " ", bgcolor=color.new(color.white, 100), text_color=color.new(color.white, 100))
+    table.cell(db, 1, 0, " ", bgcolor=color.new(color.white, 100), text_color=color.new(color.white, 100))
+
+    // Ab hier die eigentliche Tabelle (Indizes 1 bis 4)
+    table.cell(db, 0, 1, "RSA (RSI):", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 1, str.tostring(rsa_val, "#.##"), bgcolor=rsa_val > 70 ? color.new(color.red, 50) : rsa_val < 30 ? color.new(color.green, 50) : color.silver)
+    
+    table.cell(db, 0, 2, "VIX Index:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 2, str.tostring(vix, "#.##"), bgcolor=vix > 20 ? color.new(color.orange, 50) : color.silver)
+    
+    table.cell(db, 0, 3, "MOVE Index:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 3, str.tostring(move, "#.##"), bgcolor=color.silver)
+    
     float live_peak_pct = (bar_index - last_low_idx) / dynamic_len
-    table.cell(db, 0, 3, "Live Peak:", text_color=color.white, bgcolor=color.black)
-    table.cell(db, 1, 3, str.tostring(live_peak_pct * 100, "#") + "%", bgcolor=color.silver)
+    table.cell(db, 0, 4, "Live Peak:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 4, str.tostring(live_peak_pct * 100, "#") + "%", bgcolor=color.silver)
