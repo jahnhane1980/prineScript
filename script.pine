@@ -1,5 +1,5 @@
 //@version=5
-indicator("Cycle Intelligence V32.1 - Global Oracle", overlay=true, max_boxes_count=500, max_labels_count=500)
+indicator("Cycle Intelligence V32.2 - Global Oracle", overlay=true, max_boxes_count=500, max_labels_count=500)
 
 // --- 1. SETTINGS & ASSET CATEGORIES ---
 asset_type = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"], tooltip="A=Growth, B=Idx, C=BTC, D=Miner, E=Momo, F=Bonds/TLT")
@@ -47,7 +47,7 @@ color trans_col = peak_pos_pct < 0.5 ? color.red : color.green
 // --- 5. SNIPER PHYSICS & VETO SYSTEM ---
 rsi2 = ta.rsi(close, 2)
 ema8 = ta.ema(close, 8)
-[_, _, bb_l4] = ta.bollinger(close, 20, 4)
+[_, _, bb_l4] = ta.bb(close, 20, 4)
 rel_vol = (volume / ta.sma(volume, 20)) * 100
 
 // Veto 1: Falling Knife
@@ -90,7 +90,7 @@ if rel_weakness_veto
 // Dashboard
 var table db = table.new(position.top_right, 1, 1, border_width=1)
 if barstate.islast
-    msg = "!!! ORACLE V32.1 !!!\n" +
+    msg = "!!! ORACLE V32.2 !!!\n" +
           "Typ: " + asset_type + "\n" +
           "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info + "\n" +
           "Zyklus: " + str.tostring((bars_since_low/dynamic_len)*100, "#") + "%\n" +
