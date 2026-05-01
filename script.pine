@@ -38,8 +38,8 @@ if not na(p_low)
         float finished_peak_pct = (p_bar - last_low_idx) / dynamic_len
         color tri_col = finished_peak_pct < 0.5 ? color.orange : color.blue
         
-        // Dreieck unter der Kerze (Abstand halbe ATR)
-        label.new(bar_index - 10, low[10] - nz(ta.atr(14)[10]) * 0.5, text="D", style=label.style_triangleup, color=tri_col, textcolor=color.white, size=size.small)
+        // Dreieck unter der Kerze (Etage 1: ATR * 0.8)
+        label.new(bar_index - 10, low[10] - nz(ta.atr(14)[10]) * 0.8, text="D", style=label.style_triangleup, color=tri_col, textcolor=color.white, size=size.small)
 
     // Logik-Update & Tracker-Reset
     if last_low_idx != 0
@@ -68,8 +68,8 @@ if not na(p_low_wk)
         float finished_peak_pct_wk = (p_bar_wk - last_low_idx_wk) / dynamic_len_wk
         color tri_col_wk = finished_peak_pct_wk < 0.5 ? color.red : color.green
         
-        // Dreieck deutlich tiefer als Daily (Abstand 2.5 ATR für saubere Trennung)
-        label.new(bar_index - 30, low[30] - nz(ta.atr(14)[30]) * 2.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.normal)
+        // Dreieck sehr deutlich tiefer als Daily (Etage 2: ATR * 4.5 für saubere Trennung)
+        label.new(bar_index - 30, low[30] - nz(ta.atr(14)[30]) * 4.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.normal)
     last_low_idx_wk := bar_index
 
 // --- 4. PEAK-POSITION & TRANSLATION ANALYSIS ---
@@ -82,8 +82,6 @@ for i = 0 to bars_since_low
         break
 
 float peak_pos_pct = (peak_bar - last_low_idx) / dynamic_len
-// Neue, visuell schnell erfassbare Text-Logik mit Icons
-string trans_info = peak_pos_pct < 0.5 ? " 🔴 LT" : " 🟢 RT"
 
 // --- 5. SNIPER PHYSICS & VETO SYSTEM ---
 rsi2 = ta.rsi(close, 2)
@@ -91,43 +89,46 @@ ema8 = ta.ema(close, 8)
 [_, _, bb_l4] = ta.bb(close, 20, 4)
 rel_vol = (volume / ta.sma(volume, 20)) * 100
 
-// Veto 1: Falling Knife
 is_falling_knife = ((ta.change(close) / ta.atr(14)) * -1) > 2.2
-
-// Veto 2: Relative Schwäche (Miner Stagnation)
 lookback = 5
 rel_weakness_veto = (asset_type == "D" or asset_type == "C") and (ta.roc(under_price, lookback) > 1.0) and (ta.roc(close, lookback) < 0.2)
-
-// Veto 3: Bond Panic (Typ F)
 bond_panic_ok = asset_type == "F" ? move > 110 : true
 
 // --- 6. TRIGGER LOGIK & ALERTS ---
 in_window = bars_since_low > dynamic_len * 0.8 and bars_since_low < dynamic_len * 1.2
 strike_t3 = in_window and close < bb_l4 and not is_falling_knife and not rel_weakness_veto and bond_panic_ok
 
-// Alert Matrix
 if strike_t3
     alert(syminfo.ticker + "; " + str.tostring(close) + "; T3 STRIKE; " + str.tostring(peak_pos_pct*100, "#") + "%", alert.freq_once_per_bar)
 
 bool lt_warning = bars_since_low > dynamic_len * 0.5 and peak_pos_pct < 0.45 and ta.crossunder(close, ema8)
 if lt_warning
-    alert("VORSICHT: " + syminfo.ticker + " Left Translated" + trans_info + "! Peak bei " + str.tostring(peak_pos_pct*100, "#") + "%.", alert.freq_once_per_bar)
+    alert("VORSICHT: " + syminfo.ticker + " Left Translated (" + (peak_pos_pct < 0.5 ? "bärisch" : "bullisch") + ")! Peak bei " + str.tostring(peak_pos_pct*100, "#") + "%.", alert.freq_once_per_bar)
 
 // --- 7. VISUALISIERUNG (LABELS & DASHBOARD) ---
-// Institutional Flow (Dark Pool Proxy)
 inst_absorption = (volume > ta.sma(volume, 50) * 1.8) and (high - low < ta.sma(high - low, 50) * 0.8)
 bgcolor(inst_absorption ? color.new(color.purple, 90) : na)
 
-// Peak Label Tracker (Hellgrau & Schwarz)
+// Peak Label Tracker (Schwebender Diamant)
 if ta.change(peak_bar) != 0
-    string peak_text = "PEAK: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info
+    // Farben: Fuchsia (Magenta) für LT, Aqua (Cyan) für RT
+    color trans_col = peak_pos_pct < 0.5 ? color.fuchsia : color.aqua
+    
+    // Smart-Filter für Extreme: Nur bei < 25% oder > 120% wird die Zahl eingeblendet
+    bool is_outlier = peak_pos_pct < 0.25 or peak_pos_pct > 1.2
+    string peak_text = "◆" + (is_outlier ? "\n" + str.tostring(peak_pos_pct * 100, "#") + "%" : "")
+    
+    // Position etwas über dem Docht
+    float peak_atr = nz(ta.atr(14)[bar_index - peak_bar])
+    float label_y = high_since_low + (peak_atr * 0.5)
+    
     if na(current_peak_lbl)
-        current_peak_lbl := label.new(peak_bar, high, peak_text, color=color.silver, textcolor=color.black, style=label.style_label_down)
+        // style_none macht den Hintergrund unsichtbar!
+        current_peak_lbl := label.new(peak_bar, label_y, peak_text, color=color.new(color.white, 100), textcolor=trans_col, style=label.style_none, size=size.normal)
     else
-        label.set_xy(current_peak_lbl, peak_bar, high)
+        label.set_xy(current_peak_lbl, peak_bar, label_y)
         label.set_text(current_peak_lbl, peak_text)
-        // Stellt sicher, dass das Label immer Hellgrau bleibt, falls es aktualisiert wird
-        label.set_color(current_peak_lbl, color.silver) 
+        label.set_textcolor(current_peak_lbl, trans_col) 
 
 if strike_t3
     label.new(bar_index, low, "STRIKE T3\n" + asset_type, color=color.green, textcolor=color.white, style=label.style_label_up)
@@ -135,12 +136,13 @@ if strike_t3
 if rel_weakness_veto
     label.new(bar_index, high, "VETO: Rel. Schwäche\n(Partial Exit prüfen)", color=color.orange, textcolor=color.black, style=label.style_label_down)
 
-// Dashboard (Neutral Grau, kleine schwarze Schrift)
+// Dashboard (Hier bleiben ALLE Infos sichtbar!)
 var table db = table.new(position.top_right, 1, 1, border_width=1)
 if barstate.islast
+    string dash_trans = peak_pos_pct < 0.5 ? " (LT)" : " (RT)"
     msg = "!!! ORACLE !!!\n" +
           "Typ: " + asset_type + "\n" +
-          "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info + "\n" +
+          "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + dash_trans + "\n" +
           "Zyklus: " + str.tostring((bars_since_low/dynamic_len)*100, "#") + "%\n" +
           "VIX: " + str.tostring(vix, "#.#") + " | MOVE: " + str.tostring(move, "#.#")
     table.cell(db, 0, 0, msg, bgcolor=color.silver, text_color=color.black, text_size=size.small)
