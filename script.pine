@@ -1,5 +1,5 @@
 //@version=5
-indicator("Cycle Intelligence V32 - Global Oracle", overlay=true, max_boxes_count=500, max_labels_count=500)
+indicator("Cycle Intelligence V32.1 - Global Oracle", overlay=true, max_boxes_count=500, max_labels_count=500)
 
 // --- 1. SETTINGS & ASSET CATEGORIES ---
 asset_type = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"], tooltip="A=Growth, B=Idx, C=BTC, D=Miner, E=Momo, F=Bonds/TLT")
@@ -25,7 +25,8 @@ p_low = ta.pivotlow(low, 10, 10)
 if not na(p_low)
     if last_low_idx != 0
         array.push(c_hist, bar_index - last_low_idx)
-        if array.size(c_hist) > 3 then array.remove(c_hist, 0)
+        if array.size(c_hist) > 3
+            array.remove(c_hist, 0)
         if array.size(c_hist) == 3
             dynamic_len := math.round((array.get(c_hist, 2)*3 + array.get(c_hist, 1)*2 + array.get(c_hist, 0)) / 6)
     last_low_idx := bar_index
@@ -89,7 +90,7 @@ if rel_weakness_veto
 // Dashboard
 var table db = table.new(position.top_right, 1, 1, border_width=1)
 if barstate.islast
-    msg = "!!! ORACLE V32 !!!\n" +
+    msg = "!!! ORACLE V32.1 !!!\n" +
           "Typ: " + asset_type + "\n" +
           "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info + "\n" +
           "Zyklus: " + str.tostring((bars_since_low/dynamic_len)*100, "#") + "%\n" +
