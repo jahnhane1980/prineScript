@@ -4,7 +4,10 @@ indicator("Cycle Intelligence - Dual-Cycle UI", overlay=true, max_boxes_count=50
 // --- 1. SETTINGS & ASSET CATEGORIES ---
 asset_type = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"], tooltip="A=Growth, B=Idx, C=BTC, D=Miner, E=Momo, F=Bonds/TLT")
 manual_underlying = input.symbol("TVC:SILVER", "Vergleichs-Asset (für Typ D/C/F)")
-macro_years = input.int(4, "Makro Zyklus (Jahre)", options=[4, 8])
+
+// NEU: Harmonische Makro-Settings
+anchor_time = input.time(timestamp("2022-12-01 00:00"), "Makro-Anker Datum (Tag 0)", tooltip="Ab wann soll die Makro-Zählung beginnen?")
+macro_target = input.int(4, "Weekly-Zyklen pro Makro-Zyklus", minval=1, tooltip="NDX/SPX = oft 4 | BTC = oft 5 | Gold/Miner = oft 8")
 
 // --- 2. GLOBAL MACRO DATA RECOVERY ---
 vix    = request.security("CBOE:VIX", "D", close)
@@ -32,6 +35,10 @@ var label current_peak_lbl = na
 var label[] d_triangles = array.new_label()
 var label[] w_triangles = array.new_label()
 
+// Harmonische Makro-Variablen
+var int weekly_count_since_anchor = 0
+var int last_macro_idx = na
+
 // --- DAILY ENGINE ---
 p_low = ta.pivotlow(low, p_len_d, p_len_d)
 if not na(p_low)
@@ -49,12 +56,10 @@ if not na(p_low)
         // Zeichne Daily Dreieck
         label lbl_d = label.new(bar_index - p_len_d, low[p_len_d] - nz(ta.atr(14)[p_len_d]) * 0.8, text="D", style=label.style_triangleup, color=tri_col, textcolor=color.white, size=size.tiny)
         
-        // 3-Zyklen Limit Logik
         array.push(d_triangles, lbl_d)
         if array.size(d_triangles) > 3
             label.delete(array.shift(d_triangles))
 
-    // Update
     if last_low_idx != 0
         array.push(c_hist, bar_index - last_low_idx)
         if array.size(c_hist) > 3
@@ -64,12 +69,23 @@ if not na(p_low)
     last_low_idx := bar_index
     current_peak_lbl := na 
 
-// --- WEEKLY ENGINE ---
+// --- WEEKLY ENGINE & HARMONIC MACRO COUNTING ---
 var int last_low_idx_wk = 0
 p_low_wk = ta.pivotlow(low, p_len_w, p_len_w)
 int dynamic_len_wk = dynamic_len * 3 
 
 if not na(p_low_wk)
+    int actual_pivot_bar = bar_index - p_len_w
+    
+    // Zählung für den Makro-Zyklus ab dem Anker-Datum
+    if time[p_len_w] >= anchor_time
+        weekly_count_since_anchor += 1
+        
+        // Wenn die Zielanzahl an Weekly-Zyklen erreicht ist -> Makro Boden!
+        if weekly_count_since_anchor % macro_target == 0
+            last_macro_idx := actual_pivot_bar
+            label.new(last_macro_idx, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 8.0, text="MACRO\n(Zyklus " + str.tostring(weekly_count_since_anchor) + ")", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.small)
+
     if last_low_idx_wk != 0
         float max_h_wk = -1.0
         int p_bar_wk = bar_index
@@ -82,23 +98,13 @@ if not na(p_low_wk)
         color tri_col_wk = finished_peak_pct_wk < 0.5 ? color.red : color.green
         
         // Zeichne Weekly Dreieck
-        label lbl_w = label.new(bar_index - p_len_w, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 4.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.small)
+        label lbl_w = label.new(actual_pivot_bar, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 4.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.small)
         
-        // 3-Zyklen Limit Logik
         array.push(w_triangles, lbl_w)
         if array.size(w_triangles) > 3
             label.delete(array.shift(w_triangles))
             
     last_low_idx_wk := bar_index
-
-// --- MACRO ENGINE (Der Fix für Dez 2022) ---
-int macro_pivot_len = math.max(50, math.round(150 * tf_scale)) // Strukturelles Tief (ca. 6-9 Monate intakt)
-p_macro = ta.pivotlow(low, macro_pivot_len, macro_pivot_len)
-var int last_macro_idx = na
-
-if not na(p_macro)
-    last_macro_idx := bar_index - macro_pivot_len
-    label.new(last_macro_idx, low[macro_pivot_len] - nz(ta.atr(14)[macro_pivot_len]) * 8.0, text="MACRO", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.normal)
 
 // --- PEAK & VETO LOGIC ---
 bars_since_low = bar_index - last_low_idx
@@ -152,21 +158,23 @@ if barstate.islast
           "Typ: " + asset_type + "\n" +
           "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + dash_trans + "\n" +
           "Zyklus: " + str.tostring((bars_since_low/dynamic_len)*100, "#") + "%\n" +
-          "VIX: " + str.tostring(vix, "#.#") + " | MOVE: " + str.tostring(move, "#.#")
+          "W-Count: " + str.tostring(weekly_count_since_anchor % macro_target) + "/" + str.tostring(macro_target)
     table.cell(db, 0, 0, msg, bgcolor=color.silver, text_color=color.black, text_size=size.small)
 
-// --- PROGNOSE BOXEN (Neu kalibriert) ---
-// Daily Cycle Box (Transparent: 85)
+// --- PROGNOSE BOXEN (Transparent) ---
 if not na(last_low_idx) and bar_index < last_low_idx + dynamic_len * 1.2
     box.new(last_low_idx + math.round(dynamic_len * 0.85), high * 1.02, last_low_idx + math.round(dynamic_len * 1.15), low * 0.98, bgcolor=color.new(color.blue, 85), border_style=line.style_dotted)
 
-// Weekly Cycle Box (Kräftiger: 50)
 if not na(last_low_idx_wk) and bar_index < last_low_idx_wk + dynamic_len_wk * 1.2
     box.new(last_low_idx_wk + math.round(dynamic_len_wk * 0.85), high * 1.05, last_low_idx_wk + math.round(dynamic_len_wk * 1.15), low * 0.95, bgcolor=color.new(color.blue, 50), border_style=line.style_dashed)
 
-// Macro Target Prognose
-if barstate.islast and not na(last_macro_idx)
-    int macro_len_bars = math.round(macro_years * 252 * tf_scale)
-    int next_macro_idx = last_macro_idx + macro_len_bars
-    if next_macro_idx > bar_index
-        label.new(next_macro_idx, low, "MACRO", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.small)
+// --- MACRO TARGET PROGNOSE (Harmonisch) ---
+if barstate.islast and last_low_idx_wk != 0
+    int cycles_remaining = macro_target - (weekly_count_since_anchor % macro_target)
+    if cycles_remaining == macro_target
+        cycles_remaining := 0 // Makro wurde gerade getroffen
+        
+    if cycles_remaining > 0
+        int next_macro_idx = last_low_idx_wk + (cycles_remaining * dynamic_len_wk)
+        if next_macro_idx > bar_index
+            label.new(next_macro_idx, low, "TARGET\nMACRO", style=label.style_arrowup, color=color.new(color.yellow, 50), textcolor=color.gray, size=size.small)
