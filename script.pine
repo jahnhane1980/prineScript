@@ -1,5 +1,5 @@
 //@version=5
-indicator("Cycle Intelligence - Dual-Cycle UI V34.3", overlay=true, max_boxes_count=500, max_labels_count=500)
+indicator("Cycle Intelligence - Dual-Cycle UI V34.4", overlay=true, max_boxes_count=500, max_labels_count=500)
 
 // --- 1. SETTINGS ---
 asset_type = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"])
@@ -7,12 +7,7 @@ manual_underlying = input.symbol("TVC:SILVER", "Vergleichs-Asset")
 anchor_time = input.time(timestamp("2022-12-01 00:00"), "Makro-Anker Datum (Tag 0)")
 macro_target = input.int(4, "Weekly-Zyklen pro Makro-Zyklus", minval=1)
 
-// --- 2. DATA ---
-vix    = request.security("CBOE:VIX", "D", close)
-move   = request.security("TVC:MOVE", "D", close)
-under_price = request.security(manual_underlying, "D", close)
-
-// --- 3. ENGINE & SCALING ---
+// --- 2. ENGINE & SCALING ---
 s_per_bar = timeframe.in_seconds()
 tf_scale  = 86400 / s_per_bar
 int p_len_d = math.max(2, math.round(10 * tf_scale))
@@ -27,12 +22,11 @@ var box[] d_boxes = array.new_box()
 var box[] w_boxes = array.new_box()
 
 var int weekly_count_since_anchor = 0
-var int last_macro_idx = na
 var bool anchor_marked = false
 
-// --- ANCHOR MARKER (TAG 0) ---
-if not anchor_marked and time >= anchor_time
-    label.new(bar_index, low - nz(ta.atr(14)) * 6.0, text="MACRO START\n(Anker)", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.small)
+// --- ANCHOR MARKER ---
+if not anchor_marked and (time >= anchor_time or ta.cross(time, anchor_time))
+    label.new(bar_index, low - nz(ta.atr(14)) * 6.0, text="MACRO START", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.small)
     anchor_marked := true
 
 // --- DAILY ENGINE ---
@@ -41,14 +35,11 @@ if not na(p_low)
     if last_low_idx != 0
         float max_h = -1.0
         int p_bar = bar_index
-        int lookback_bars = bar_index - last_low_idx
-        for i = 0 to lookback_bars
+        for i = 0 to (bar_index - last_low_idx)
             if high[i] > max_h
-                max_h := high[i]
-                p_bar := bar_index - i
+                max_h := high[i], p_bar := bar_index - i
         float finished_peak_pct = (p_bar - last_low_idx) / dynamic_len
         color tri_col = finished_peak_pct < 0.5 ? color.orange : color.blue
-        
         label.new(bar_index - p_len_d, low[p_len_d] - nz(ta.atr(14)[p_len_d]) * 0.8, text="D", style=label.style_triangleup, color=tri_col, textcolor=color.white, size=size.tiny)
             
         box b_d = box.new(last_low_idx + math.round(dynamic_len * 0.85), high * 1.02, last_low_idx + math.round(dynamic_len * 1.15), low * 0.98, bgcolor=color.new(color.white, 50), border_style=line.style_dotted)
@@ -59,7 +50,7 @@ if not na(p_low)
     last_low_idx := bar_index
     current_peak_lbl := na
 
-// --- WEEKLY ENGINE & HARMONIC MACRO ---
+// --- WEEKLY ENGINE ---
 var int last_low_idx_wk = 0
 p_low_wk = ta.pivotlow(low, p_len_w, p_len_w)
 int dynamic_len_wk = dynamic_len * 3
@@ -68,45 +59,39 @@ if not na(p_low_wk)
     int actual_pivot_bar = bar_index - p_len_w
     if time[p_len_w] >= anchor_time
         weekly_count_since_anchor += 1
-        
-        // Markiere jeden Makro-Abschluss (z.B. den 4. Weekly-Boden)
         if weekly_count_since_anchor % macro_target == 0
-            last_macro_idx := actual_pivot_bar
-            label.new(last_macro_idx, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 8.0, text="MACRO CYCLE\nEND", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.small)
+            label.new(actual_pivot_bar, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 8.0, text="MACRO END", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.small)
 
     if last_low_idx_wk != 0
         float max_h_wk = -1.0
         int p_bar_wk = bar_index
-        int lookback_bars_wk = bar_index - last_low_idx_wk
-        for i = 0 to lookback_bars_wk
+        for i = 0 to (bar_index - last_low_idx_wk)
             if high[i] > max_h_wk
-                max_h_wk := high[i]
-                p_bar_wk := bar_index - i
+                max_h_wk := high[i], p_bar_wk := bar_index - i
         float finished_peak_pct_wk = (p_bar_wk - last_low_idx_wk) / dynamic_len_wk
         color tri_col_wk = finished_peak_pct_wk < 0.5 ? color.red : color.green
-        
         label.new(actual_pivot_bar, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 4.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.small)
             
         box b_w = box.new(last_low_idx_wk + math.round(dynamic_len_wk * 0.85), high * 1.05, last_low_idx_wk + math.round(dynamic_len_wk * 1.15), low * 0.95, bgcolor=color.new(color.blue, 50), border_style=line.style_dashed)
         array.push(w_boxes, b_w)
         if array.size(w_boxes) > 3
             box.delete(array.shift(w_boxes))
-            
     last_low_idx_wk := bar_index
 
-// --- PEAK-TRACKER ---
+// --- PEAK-TRACKER & ZÜNDSCHNUR LOGIK ---
 bars_since_low = bar_index - last_low_idx
 high_since_low = ta.highest(high, math.max(1, bars_since_low))
 int peak_bar = na
 for i = 0 to bars_since_low
     if high[i] == high_since_low
-        peak_bar := bar_index - i
-        break
+        peak_bar := bar_index - i, break
 float peak_pos_pct = last_low_idx != 0 ? (peak_bar - last_low_idx) / dynamic_len : 0.0
 
 if ta.change(peak_bar) != 0
-    color trans_col = peak_pos_pct < 0.5 ? color.fuchsia : color.aqua
-    bool is_outlier = peak_pos_pct < 0.25 or peak_pos_pct > 1.2
+    // Zündschnur Farben
+    color trans_col = peak_pos_pct < 0.5 ? color.fuchsia : peak_pos_pct > 1.8 ? color.red : peak_pos_pct > 1.4 ? color.orange : color.aqua
+    
+    bool is_outlier = peak_pos_pct < 0.25 or peak_pos_pct > 1.4
     string peak_text = "◆" + (is_outlier ? "\n" + str.tostring(peak_pos_pct * 100, "#") + "%" : "")
     float peak_atr = nz(ta.atr(14)[bar_index - peak_bar])
     float label_y = high_since_low + (peak_atr * 0.5)
@@ -114,23 +99,18 @@ if ta.change(peak_bar) != 0
     if na(current_peak_lbl)
         current_peak_lbl := label.new(peak_bar, label_y, peak_text, color=color.new(color.white, 100), textcolor=trans_col, style=label.style_none, size=size.normal)
     else
-        label.set_xy(current_peak_lbl, peak_bar, label_y)
-        label.set_text(current_peak_lbl, peak_text)
-        label.set_textcolor(current_peak_lbl, trans_col)
+        label.set_xy(current_peak_lbl, peak_bar, label_y), label.set_text(current_peak_lbl, peak_text), label.set_textcolor(current_peak_lbl, trans_col)
 
 // --- DASHBOARD ---
 var table db = table.new(position.top_right, 1, 1, border_width=1)
 if barstate.islast
-    string dash_trans = peak_pos_pct < 0.5 ? " (LT)" : " (RT)"
-    msg = "!!! ORACLE !!!\n" + "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + dash_trans + "\n" + "W-Count: " + str.tostring(weekly_count_since_anchor % macro_target) + "/" + str.tostring(macro_target)
+    string status = peak_pos_pct > 1.4 ? "ZÜNDSCHNUR BRENNT!" : "Normal"
+    msg = "!!! ORACLE !!!\n" + "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%\n" + "Status: " + status + "\nW-Count: " + str.tostring(weekly_count_since_anchor % macro_target) + "/" + str.tostring(macro_target)
     table.cell(db, 0, 0, msg, bgcolor=color.silver, text_color=color.black, text_size=size.small)
 
-// --- FUTURE TARGET CALCULATION ---
+// --- PROJEKTION ---
 if barstate.islast and last_low_idx_wk != 0
-    int cycles_remaining = macro_target - (weekly_count_since_anchor % macro_target)
-    // Wenn wir genau auf einem Makro-Ende sind, zeigen wir den nächsten kompletten Zyklus
-    int calc_cycles = cycles_remaining <= 0 ? macro_target : cycles_remaining
-    int next_macro_idx = last_low_idx_wk + (calc_cycles * dynamic_len_wk)
-    
+    int calc_cycles = macro_target - (weekly_count_since_anchor % macro_target)
+    int next_macro_idx = last_low_idx_wk + (math.max(1, calc_cycles) * dynamic_len_wk)
     if next_macro_idx > bar_index
         label.new(next_macro_idx, low, "TARGET\nMACRO", style=label.style_arrowup, color=color.new(color.yellow, 50), textcolor=color.gray, size=size.small)
