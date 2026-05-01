@@ -1,5 +1,5 @@
 //@version=5
-indicator("Cycle Intelligence V33.0 - Dual-Cycle UI", overlay=true, max_boxes_count=500, max_labels_count=500)
+indicator("Cycle Intelligence - Dual-Cycle UI", overlay=true, max_boxes_count=500, max_labels_count=500)
 
 // --- 1. SETTINGS & ASSET CATEGORIES ---
 asset_type = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"], tooltip="A=Growth, B=Idx, C=BTC, D=Miner, E=Momo, F=Bonds/TLT")
@@ -68,8 +68,8 @@ if not na(p_low_wk)
         float finished_peak_pct_wk = (p_bar_wk - last_low_idx_wk) / dynamic_len_wk
         color tri_col_wk = finished_peak_pct_wk < 0.5 ? color.red : color.green
         
-        // Dreieck tiefer als Daily (Abstand 1.5 ATR)
-        label.new(bar_index - 30, low[30] - nz(ta.atr(14)[30]) * 1.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.normal)
+        // Dreieck deutlich tiefer als Daily (Abstand 2.5 ATR für saubere Trennung)
+        label.new(bar_index - 30, low[30] - nz(ta.atr(14)[30]) * 2.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.normal)
     last_low_idx_wk := bar_index
 
 // --- 4. PEAK-POSITION & TRANSLATION ANALYSIS ---
@@ -82,8 +82,8 @@ for i = 0 to bars_since_low
         break
 
 float peak_pos_pct = (peak_bar - last_low_idx) / dynamic_len
-string trans_info = peak_pos_pct < 0.5 ? " (bärisch / LT)" : " (bullisch / RT)"
-color trans_col = peak_pos_pct < 0.5 ? color.red : color.green
+// Neue, visuell schnell erfassbare Text-Logik mit Icons
+string trans_info = peak_pos_pct < 0.5 ? " 🔴 LT" : " 🟢 RT"
 
 // --- 5. SNIPER PHYSICS & VETO SYSTEM ---
 rsi2 = ta.rsi(close, 2)
@@ -118,14 +118,16 @@ if lt_warning
 inst_absorption = (volume > ta.sma(volume, 50) * 1.8) and (high - low < ta.sma(high - low, 50) * 0.8)
 bgcolor(inst_absorption ? color.new(color.purple, 90) : na)
 
-// Peak Label Tracker (Verschiebt das Label, statt neu zu zeichnen)
+// Peak Label Tracker (Hellgrau & Schwarz)
 if ta.change(peak_bar) != 0
+    string peak_text = "PEAK: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info
     if na(current_peak_lbl)
-        current_peak_lbl := label.new(peak_bar, high, "PEAK: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info, color=trans_col, textcolor=color.white, style=label.style_label_down)
+        current_peak_lbl := label.new(peak_bar, high, peak_text, color=color.silver, textcolor=color.black, style=label.style_label_down)
     else
         label.set_xy(current_peak_lbl, peak_bar, high)
-        label.set_text(current_peak_lbl, "PEAK: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info)
-        label.set_color(current_peak_lbl, trans_col)
+        label.set_text(current_peak_lbl, peak_text)
+        // Stellt sicher, dass das Label immer Hellgrau bleibt, falls es aktualisiert wird
+        label.set_color(current_peak_lbl, color.silver) 
 
 if strike_t3
     label.new(bar_index, low, "STRIKE T3\n" + asset_type, color=color.green, textcolor=color.white, style=label.style_label_up)
@@ -133,15 +135,15 @@ if strike_t3
 if rel_weakness_veto
     label.new(bar_index, high, "VETO: Rel. Schwäche\n(Partial Exit prüfen)", color=color.orange, textcolor=color.black, style=label.style_label_down)
 
-// Dashboard
+// Dashboard (Neutral Grau, kleine schwarze Schrift)
 var table db = table.new(position.top_right, 1, 1, border_width=1)
 if barstate.islast
-    msg = "!!! ORACLE V33.0 !!!\n" +
+    msg = "!!! ORACLE !!!\n" +
           "Typ: " + asset_type + "\n" +
           "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info + "\n" +
           "Zyklus: " + str.tostring((bars_since_low/dynamic_len)*100, "#") + "%\n" +
           "VIX: " + str.tostring(vix, "#.#") + " | MOVE: " + str.tostring(move, "#.#")
-    table.cell(db, 0, 0, msg, bgcolor=trans_col, text_color=color.white)
+    table.cell(db, 0, 0, msg, bgcolor=color.silver, text_color=color.black, text_size=size.small)
 
 // Cycle Box
 if not na(last_low_idx) and bar_index < last_low_idx + dynamic_len * 1.2
