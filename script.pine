@@ -1,5 +1,5 @@
 //@version=5
-indicator("Cycle Intelligence V32.3 - Global Oracle", overlay=true, max_boxes_count=500, max_labels_count=500)
+indicator("Cycle Intelligence V33.0 - Dual-Cycle UI", overlay=true, max_boxes_count=500, max_labels_count=500)
 
 // --- 1. SETTINGS & ASSET CATEGORIES ---
 asset_type = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"], tooltip="A=Growth, B=Idx, C=BTC, D=Miner, E=Momo, F=Bonds/TLT")
@@ -21,8 +21,27 @@ var int last_low_idx = 0
 int base_len = asset_type == "F" ? 42 : asset_type == "C" ? 40 : asset_type == "D" ? 32 : 35
 var int dynamic_len = math.round(base_len * tf_scale)
 
+// Label-Tracker Variable
+var label current_peak_lbl = na
+
 p_low = ta.pivotlow(low, 10, 10)
 if not na(p_low)
+    // VISUAL: Zeichne Daily Triangle für den abgeschlossenen Zyklus
+    if last_low_idx != 0
+        float max_h = -1.0
+        int p_bar = bar_index
+        int lookback_bars = bar_index - last_low_idx
+        for i = 0 to lookback_bars
+            if high[i] > max_h
+                max_h := high[i]
+                p_bar := bar_index - i
+        float finished_peak_pct = (p_bar - last_low_idx) / dynamic_len
+        color tri_col = finished_peak_pct < 0.5 ? color.orange : color.blue
+        
+        // Dreieck unter der Kerze (Abstand halbe ATR)
+        label.new(bar_index - 10, low[10] - nz(ta.atr(14)[10]) * 0.5, text="D", style=label.style_triangleup, color=tri_col, textcolor=color.white, size=size.small)
+
+    // Logik-Update & Tracker-Reset
     if last_low_idx != 0
         array.push(c_hist, bar_index - last_low_idx)
         if array.size(c_hist) > 3
@@ -30,6 +49,28 @@ if not na(p_low)
         if array.size(c_hist) == 3
             dynamic_len := math.round((array.get(c_hist, 2)*3 + array.get(c_hist, 1)*2 + array.get(c_hist, 0)) / 6)
     last_low_idx := bar_index
+    current_peak_lbl := na // Reset für neues Label im neuen Zyklus
+
+// --- 3b. WEEKLY CYCLE ENGINE (VISUAL ONLY) ---
+var int last_low_idx_wk = 0
+p_low_wk = ta.pivotlow(low, 30, 30)
+
+if not na(p_low_wk)
+    int dynamic_len_wk = dynamic_len * 3 // Schätzwert für Weekly Länge
+    if last_low_idx_wk != 0
+        float max_h_wk = -1.0
+        int p_bar_wk = bar_index
+        int lookback_bars_wk = bar_index - last_low_idx_wk
+        for i = 0 to lookback_bars_wk
+            if high[i] > max_h_wk
+                max_h_wk := high[i]
+                p_bar_wk := bar_index - i
+        float finished_peak_pct_wk = (p_bar_wk - last_low_idx_wk) / dynamic_len_wk
+        color tri_col_wk = finished_peak_pct_wk < 0.5 ? color.red : color.green
+        
+        // Dreieck tiefer als Daily (Abstand 1.5 ATR)
+        label.new(bar_index - 30, low[30] - nz(ta.atr(14)[30]) * 1.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.normal)
+    last_low_idx_wk := bar_index
 
 // --- 4. PEAK-POSITION & TRANSLATION ANALYSIS ---
 bars_since_low = bar_index - last_low_idx
@@ -77,9 +118,14 @@ if lt_warning
 inst_absorption = (volume > ta.sma(volume, 50) * 1.8) and (high - low < ta.sma(high - low, 50) * 0.8)
 bgcolor(inst_absorption ? color.new(color.purple, 90) : na)
 
-// Peak & Strike Labels
+// Peak Label Tracker (Verschiebt das Label, statt neu zu zeichnen)
 if ta.change(peak_bar) != 0
-    label.new(peak_bar, high, "PEAK: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info, color=trans_col, textcolor=color.white, style=label.style_label_down)
+    if na(current_peak_lbl)
+        current_peak_lbl := label.new(peak_bar, high, "PEAK: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info, color=trans_col, textcolor=color.white, style=label.style_label_down)
+    else
+        label.set_xy(current_peak_lbl, peak_bar, high)
+        label.set_text(current_peak_lbl, "PEAK: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info)
+        label.set_color(current_peak_lbl, trans_col)
 
 if strike_t3
     label.new(bar_index, low, "STRIKE T3\n" + asset_type, color=color.green, textcolor=color.white, style=label.style_label_up)
@@ -90,7 +136,7 @@ if rel_weakness_veto
 // Dashboard
 var table db = table.new(position.top_right, 1, 1, border_width=1)
 if barstate.islast
-    msg = "!!! ORACLE V32.3 !!!\n" +
+    msg = "!!! ORACLE V33.0 !!!\n" +
           "Typ: " + asset_type + "\n" +
           "Peak: " + str.tostring(peak_pos_pct * 100, "#") + "%" + trans_info + "\n" +
           "Zyklus: " + str.tostring((bars_since_low/dynamic_len)*100, "#") + "%\n" +
