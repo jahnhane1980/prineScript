@@ -1,19 +1,44 @@
 //@version=5
-indicator("Cycle Intelligence - Adaptive Integrated V35.6", overlay=true, max_boxes_count=500, max_labels_count=500)
+indicator("Cycle Intelligence - Omnipredator V37.8", overlay=true, max_labels_count=500)
 
 // --- 1. SETTINGS & INPUTS ---
-asset_type        = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"])
-manual_underlying = input.symbol("TVC:SILVER", "Vergleichs-Asset")
-rsi_len           = input.int(14, "RSI Länge (RSA)")
-show_boxes        = input.bool(true, "Prognose-Boxen anzeigen")
+auto_detect       = input.bool(true, "Auto-Asset-Erkennung aktiv?")
+sensitivity       = input.string("Balanced", "Sensitivität", options=["Aggressive", "Balanced", "Conservative"])
+manual_type       = input.string("A", "Manuelle Kategorie", options=["A", "B", "C", "D", "E", "F"])
+manual_underlying = input.symbol("TVC:SILVER", "Vergleichs-Asset (Typ D)")
+rsi_len           = input.int(14, "RSI Haupt-Länge")
+sma_stretch_limit = input.float(15.0, "SMA 200 Stretch Warnung (%)")
+daily_per_weekly  = input.int(4, "Daily Cycles pro Weekly")
 
-// --- 2. GLOBAL INDICATOR NESTING (Regel 3: Bestandsschutz) ---
+// --- 2. AUTO-DETECTION LOGIC ---
+get_asset_type() =>
+    string detected = manual_type
+    if auto_detect
+        t = syminfo.ticker
+        if str.contains(t, "BTC") or str.contains(t, "ETH") or str.contains(t, "GOLD") or str.contains(t, "SILVER")
+            detected := "C"
+        else if str.contains(t, "MARA") or str.contains(t, "RIOT") or str.contains(t, "NEM")
+            detected := "D"
+        else if str.contains(t, "NDX") or str.contains(t, "SPX") or str.contains(t, "DAX") or str.contains(t, "NAS100")
+            detected := "B"
+    detected
+
+asset_type = get_asset_type()
+
+// --- 3. GLOBAL INDICATORS ---
 vix         = request.security("CBOE:VIX", "D", close)
+vix_sma     = ta.sma(vix, 20)
 move        = request.security("TVC:MOVE", "D", close)
+dxy         = request.security("TVC:DXY", "D", close)
+us10y       = request.security("TVC:US10Y", "D", close)
 under_price = request.security(manual_underlying, "D", close)
-rsa_val     = ta.rsi(close, rsi_len)
 
-// --- 3. ADAPTIVE ENGINE & SCALING ---
+rsa_val     = ta.rsi(close, rsi_len)
+rsa_fast    = ta.rsi(close, 2) 
+sma200      = ta.sma(close, 200)
+stretch_pct = ((close - sma200) / sma200) * 100
+
+// --- 4. ENGINE & CYCLES (Full Logic) ---
 s_per_bar = timeframe.in_seconds()
 tf_scale  = 86400 / s_per_bar
 int p_len_d = math.max(2, math.round(10 * tf_scale))
@@ -22,29 +47,16 @@ int p_len_w = math.max(3, math.round(30 * tf_scale))
 var int last_low_idx = 0
 int base_len = asset_type == "F" ? 42 : asset_type == "C" ? 40 : asset_type == "D" ? 32 : 35
 var int dynamic_len = math.round(base_len * tf_scale)
+int dynamic_len_wk = dynamic_len * daily_per_weekly
 
-var box[] d_boxes = array.new_box()
-var box[] w_boxes = array.new_box()
-
+var float last_w_price = na
+var line  structure_line = na
 var label last_d_label = na
 var int last_d_bar = 0
 
-// --- 4. ADAPTIVE PROJECTION LOGIC ---
-get_adaptive_offsets(float peak_pct) =>
-    float left  = 0.0
-    float right = 0.0
-    if peak_pct > 1.2      // Massive RT Übertreibung
-        left := 1.25, right := 1.60
-    else if peak_pct > 0.8 // Normale RT
-        left := 1.05, right := 1.35
-    else if peak_pct < 0.4 // Left Translation
-        left := 0.65, right := 0.95
-    else                   // Standard
-        left := 0.85, right := 1.15
-    [left, right]
-
-// --- 5. DAILY ENGINE ---
+// Daily Engine
 p_low = ta.pivotlow(low, p_len_d, p_len_d)
+float live_peak_pct = (bar_index - last_low_idx) / dynamic_len
 
 if not na(p_low)
     int current_low_idx = bar_index - p_len_d
@@ -55,78 +67,95 @@ if not na(p_low)
             if high[i] > max_h
                 max_h := high[i]
                 peak_bar := bar_index - i
-        
         float peak_pos_pct = (peak_bar - last_low_idx) / dynamic_len
         color p_col = peak_pos_pct < 0.5 ? color.fuchsia : peak_pos_pct > 1.8 ? color.red : peak_pos_pct > 1.4 ? color.orange : color.aqua
-        
-        string p_txt = "◆\n" + str.tostring(peak_pos_pct * 100, "#") + "%"
-        label.new(peak_bar, max_h + (ta.atr(14) * 0.5), text=p_txt, color=color.new(color.white, 100), textcolor=p_col, style=label.style_none, size=size.normal)
-        
-        color tri_col = peak_pos_pct < 0.5 ? color.orange : color.blue
-        last_d_label := label.new(current_low_idx, low[p_len_d] - nz(ta.atr(14)[p_len_d]) * 1.5, text="D", color=color.new(color.white, 100), textcolor=tri_col, style=label.style_none, size=size.large)
+        label.new(peak_bar, max_h + (ta.atr(14) * 0.5), text="◆\n" + str.tostring(peak_pos_pct * 100, "#") + "%", color=color.new(color.white, 100), textcolor=p_col, style=label.style_none, size=size.normal)
+        color d_col = peak_pos_pct < 0.5 ? color.orange : color.blue
+        last_d_label := label.new(current_low_idx, low[p_len_d] - ta.atr(14)*1.5, text="D", color=color.new(color.white, 100), textcolor=d_col, style=label.style_none, size=size.large)
         last_d_bar := current_low_idx
-        
-        if show_boxes
-            [box_l, box_r] = get_adaptive_offsets(peak_pos_pct)
-            box b_d = box.new(last_low_idx + math.round(dynamic_len * box_l), high * 1.02, last_low_idx + math.round(dynamic_len * box_r), low * 0.98, bgcolor=color.new(color.white, 80), border_style=line.style_dotted)
-            array.push(d_boxes, b_d)
-            if array.size(d_boxes) > 3
-                box.delete(array.shift(d_boxes))
-            
     last_low_idx := current_low_idx
 
-// --- 6. WEEKLY ENGINE ---
-var int last_low_idx_wk = 0
+// Weekly Engine & Structure Guardian
 p_low_wk = ta.pivotlow(low, p_len_w, p_len_w)
-int dynamic_len_wk = dynamic_len * 3
+var int last_low_idx_wk = 0
 
 if not na(p_low_wk)
     int actual_pivot_bar = bar_index - p_len_w
+    float current_w_val = low[p_len_w]
+    float finished_peak_pct_wk = 1.0 
     if last_low_idx_wk != 0
         float max_h_wk = -1.0
         int peak_bar_wk = last_low_idx_wk
         for i = (bar_index - actual_pivot_bar) to (bar_index - last_low_idx_wk)
             if high[i] > max_h_wk
-                max_h_wk := high[i], peak_bar_wk := bar_index - i
-        
-        float peak_pos_pct_wk = (peak_bar_wk - last_low_idx_wk) / dynamic_len_wk
-        color tri_col_wk = peak_pos_pct_wk < 0.5 ? color.red : color.green
-        
-        float w_y_pos = low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 4.5
-        if actual_pivot_bar == last_d_bar
-            label.set_x(last_d_label, actual_pivot_bar - 2)
-            label.new(actual_pivot_bar + 2, w_y_pos, text="W", color=color.new(color.white, 100), textcolor=tri_col_wk, style=label.style_none, size=size.large)
-        else
-            label.new(actual_pivot_bar, w_y_pos, text="W", color=color.new(color.white, 100), textcolor=tri_col_wk, style=label.style_none, size=size.large)
-        
-        if show_boxes
-            [box_l_wk, box_r_wk] = get_adaptive_offsets(peak_pos_pct_wk)
-            box b_w = box.new(last_low_idx_wk + math.round(dynamic_len_wk * box_l_wk), high * 1.05, last_low_idx_wk + math.round(dynamic_len_wk * box_r_wk), low * 0.95, bgcolor=color.new(color.blue, 80), border_style=line.style_dashed)
-            array.push(w_boxes, b_w)
-            if array.size(w_boxes) > 3
-                box.delete(array.shift(w_boxes))
-            
+                max_h_wk := high[i]
+                peak_bar_wk := bar_index - i
+        finished_peak_pct_wk := (peak_bar_wk - last_low_idx_wk) / dynamic_len_wk
+    
+    if not na(last_w_price)
+        line.delete(structure_line)
+        structure_line := line.new(bar_index[p_len_w*2], last_w_price, actual_pivot_bar, current_w_val, extend=extend.right, color=current_w_val < last_w_price ? color.red : color.green, width=2, style=line.style_dashed)
+    
+    last_w_price := current_w_val
+    color w_col = finished_peak_pct_wk < 0.5 ? color.red : color.green
+    if actual_pivot_bar == last_d_bar
+        label.set_x(last_d_label, actual_pivot_bar - 2)
+        label.new(actual_pivot_bar + 2, current_w_val - ta.atr(14)*4, text="W", color=color.new(color.white, 100), textcolor=w_col, style=label.style_none, size=size.large)
+    else
+        label.new(actual_pivot_bar, current_w_val - ta.atr(14)*4, text="W", color=color.new(color.white, 100), textcolor=w_col, style=label.style_none, size=size.large)
     last_low_idx_wk := actual_pivot_bar
 
-// --- 7. DASHBOARD (Mit Spacer-Zeile für vertikalen Abstand) ---
-// Wir erhöhen auf 5 Zeilen: Zeile 0 ist der Spacer.
-var table db = table.new(position.top_center, 2, 5, border_width=1, border_color=color.gray)
+// --- 5. RISK & WARNING INTENSITY (The Consolidated Predator) ---
+bool c_peak     = live_peak_pct > 1.3
+bool c_rsi2     = rsa_fast > 90      
+bool c_stretch  = stretch_pct > sma_stretch_limit 
+bool v_spike    = vix > vix_sma * 1.2
+bool r_hot      = rsa_val > 68
+bool d_up       = dxy > ta.sma(dxy, 20)
+bool m_up       = move > 100
+bool y_up       = us10y > ta.sma(us10y, 20)
+[_, bb_upper_val, _] = ta.bb(close, 20, 2.5)
+bool b_top      = close > bb_upper_val[1]
+bool v_climax   = volume > ta.sma(volume, 20) * 1.5
 
+int active_warnings = 0
+int total_conditions = 1
+
+if asset_type == "A" or asset_type == "B"
+    total_conditions := 8
+    active_warnings := (c_peak ? 1 : 0) + (c_rsi2 ? 1 : 0) + (c_stretch ? 1 : 0) + (v_spike ? 1 : 0) + (r_hot ? 1 : 0) + (d_up ? 1 : 0) + (b_top ? 1 : 0) + (v_climax ? 1 : 0)
+else if asset_type == "C"
+    total_conditions := 6
+    active_warnings := (c_peak ? 1 : 0) + (c_rsi2 ? 1 : 0) + (m_up ? 1 : 0) + (y_up ? 1 : 0) + (d_up ? 1 : 0) + (stretch_pct > 25 ? 1 : 0)
+else
+    total_conditions := 5
+    active_warnings := (c_peak ? 1 : 0) + (c_rsi2 ? 1 : 0) + (rsa_val > 70 ? 1 : 0) + (v_climax ? 1 : 0) + (b_top ? 1 : 0)
+
+float risk_ratio = float(active_warnings) / total_conditions
+float thresh = sensitivity == "Aggressive" ? 0.20 : sensitivity == "Balanced" ? 0.33 : 0.50
+bgcolor(risk_ratio >= thresh ? color.new(color.gray, 80) : na)
+
+// --- 6. GRAVITY ZONE (Mean Reversion Target) ---
 if barstate.islast
-    // Zeile 0: Unsichtbarer Spacer (Pusht die Tabelle nach unten)
-    table.cell(db, 0, 0, " ", bgcolor=color.new(color.white, 100), text_color=color.new(color.white, 100))
-    table.cell(db, 1, 0, " ", bgcolor=color.new(color.white, 100), text_color=color.new(color.white, 100))
+    line.new(bar_index, sma200, bar_index + 10, sma200, extend=extend.right, color=color.new(color.gray, 50), style=line.style_dashed)
+    label.new(bar_index + 10, sma200, "Mean Reversion Target\n(The Liquidity Floor)", color=color.new(color.white, 100), textcolor=color.gray, style=label.style_none, size=size.small)
 
-    // Ab hier die eigentliche Tabelle (Indizes 1 bis 4)
-    table.cell(db, 0, 1, "RSA (RSI):", text_color=color.white, bgcolor=color.black)
-    table.cell(db, 1, 1, str.tostring(rsa_val, "#.##"), bgcolor=rsa_val > 70 ? color.new(color.red, 50) : rsa_val < 30 ? color.new(color.green, 50) : color.silver)
-    
-    table.cell(db, 0, 2, "VIX Index:", text_color=color.white, bgcolor=color.black)
-    table.cell(db, 1, 2, str.tostring(vix, "#.##"), bgcolor=vix > 20 ? color.new(color.orange, 50) : color.silver)
-    
-    table.cell(db, 0, 3, "MOVE Index:", text_color=color.white, bgcolor=color.black)
-    table.cell(db, 1, 3, str.tostring(move, "#.##"), bgcolor=color.silver)
-    
-    float live_peak_pct = (bar_index - last_low_idx) / dynamic_len
-    table.cell(db, 0, 4, "Live Peak:", text_color=color.white, bgcolor=color.black)
-    table.cell(db, 1, 4, str.tostring(live_peak_pct * 100, "#") + "%", bgcolor=color.silver)
+// --- 7. DASHBOARD (Top-Left) ---
+var table db = table.new(position.top_left, 2, 10, border_width=1, border_color=color.gray)
+if barstate.islast
+    table.cell(db, 0, 0, " ", bgcolor=color.new(color.white, 100))
+    table.cell(db, 1, 0, " ", bgcolor=color.new(color.white, 100))
+    table.cell(db, 0, 1, "SYSTEM MODE:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 1, (auto_detect ? "AUTO (" + asset_type + ")" : "MANUAL"), bgcolor=auto_detect ? color.green : color.orange)
+    table.cell(db, 0, 2, "STRUCTURE:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 2, (close < last_w_price ? "BROKEN" : "BULLISH"), bgcolor=(close < last_w_price ? color.red : color.green), text_color=color.white)
+    table.cell(db, 0, 3, "RISK RATIO:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 3, str.tostring(risk_ratio * 100, "#") + "%", bgcolor=(risk_ratio >= thresh ? color.red : color.silver))
+    table.cell(db, 0, 4, "RSI (2-DAY):", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 4, str.tostring(rsa_fast, "#.#"), bgcolor=(rsa_fast > 90 ? color.red : color.silver))
+    table.cell(db, 0, 5, "SMA STRETCH:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 5, str.tostring(stretch_pct, "#.#") + "%", bgcolor=(stretch_pct > sma_stretch_limit ? color.orange : color.silver))
+    table.cell(db, 0, 6, "VIX STATUS:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 6, str.tostring(vix, "#.#"), bgcolor=(v_spike ? color.red : color.silver))
+    table.cell(db, 0, 7, "LIVE PEAK:", text_color=color.white, bgcolor=color.black)
+    table.cell(db, 1, 7, str.tostring(live_peak_pct * 100, "#") + "%", bgcolor=color.silver)
