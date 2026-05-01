@@ -3,7 +3,8 @@ indicator("Cycle Intelligence - Dual-Cycle UI", overlay=true, max_boxes_count=50
 
 // --- 1. SETTINGS & ASSET CATEGORIES ---
 asset_type = input.string("A", "Asset Kategorie", options=["A", "B", "C", "D", "E", "F"], tooltip="A=Growth, B=Idx, C=BTC, D=Miner, E=Momo, F=Bonds/TLT")
-manual_underlying = input.symbol("TVC:SILVER", "Vergleichs-Asset (für Typ D/C/F)", tooltip="Wähle das passende Underlying (z.B. Silver für Miner, BTC für Crypto-Miner)")
+manual_underlying = input.symbol("TVC:SILVER", "Vergleichs-Asset (für Typ D/C/F)")
+macro_years = input.int(4, "Makro Zyklus (Jahre)", options=[4, 8])
 
 // --- 2. GLOBAL MACRO DATA RECOVERY ---
 vix    = request.security("CBOE:VIX", "D", close)
@@ -13,20 +14,27 @@ fed    = request.security("FRED:WALCL", "W", close)
 wti    = request.security("TVC:USOIL", "D", close)
 under_price = request.security(manual_underlying, "D", close)
 
-// --- 3. ADAPTIVE WMA CYCLE ENGINE (3-2-1 WEIGHTING) ---
+// --- 3. ADAPTIVE WMA CYCLE ENGINE ---
 s_per_bar = timeframe.in_seconds()
 tf_scale  = 86400 / s_per_bar
+
+int p_len_d = math.max(2, math.round(10 * tf_scale))
+int p_len_w = math.max(3, math.round(30 * tf_scale))
+
 var int[] c_hist = array.new_int(0)
 var int last_low_idx = 0
 int base_len = asset_type == "F" ? 42 : asset_type == "C" ? 40 : asset_type == "D" ? 32 : 35
 var int dynamic_len = math.round(base_len * tf_scale)
 
-// Label-Tracker Variable
 var label current_peak_lbl = na
 
-p_low = ta.pivotlow(low, 10, 10)
+// Arrays für das 3-Zyklen-Limit (Clutter-Fix)
+var label[] d_triangles = array.new_label()
+var label[] w_triangles = array.new_label()
+
+// --- DAILY ENGINE ---
+p_low = ta.pivotlow(low, p_len_d, p_len_d)
 if not na(p_low)
-    // VISUAL: Zeichne Daily Triangle für den abgeschlossenen Zyklus
     if last_low_idx != 0
         float max_h = -1.0
         int p_bar = bar_index
@@ -38,10 +46,15 @@ if not na(p_low)
         float finished_peak_pct = (p_bar - last_low_idx) / dynamic_len
         color tri_col = finished_peak_pct < 0.5 ? color.orange : color.blue
         
-        // Dreieck unter der Kerze (Etage 1: ATR * 0.8)
-        label.new(bar_index - 10, low[10] - nz(ta.atr(14)[10]) * 0.8, text="D", style=label.style_triangleup, color=tri_col, textcolor=color.white, size=size.small)
+        // Zeichne Daily Dreieck
+        label lbl_d = label.new(bar_index - p_len_d, low[p_len_d] - nz(ta.atr(14)[p_len_d]) * 0.8, text="D", style=label.style_triangleup, color=tri_col, textcolor=color.white, size=size.tiny)
+        
+        // 3-Zyklen Limit Logik
+        array.push(d_triangles, lbl_d)
+        if array.size(d_triangles) > 3
+            label.delete(array.shift(d_triangles))
 
-    // Logik-Update & Tracker-Reset
+    // Update
     if last_low_idx != 0
         array.push(c_hist, bar_index - last_low_idx)
         if array.size(c_hist) > 3
@@ -49,14 +62,14 @@ if not na(p_low)
         if array.size(c_hist) == 3
             dynamic_len := math.round((array.get(c_hist, 2)*3 + array.get(c_hist, 1)*2 + array.get(c_hist, 0)) / 6)
     last_low_idx := bar_index
-    current_peak_lbl := na // Reset für neues Label im neuen Zyklus
+    current_peak_lbl := na 
 
-// --- 3b. WEEKLY CYCLE ENGINE (VISUAL ONLY) ---
+// --- WEEKLY ENGINE ---
 var int last_low_idx_wk = 0
-p_low_wk = ta.pivotlow(low, 30, 30)
+p_low_wk = ta.pivotlow(low, p_len_w, p_len_w)
+int dynamic_len_wk = dynamic_len * 3 
 
 if not na(p_low_wk)
-    int dynamic_len_wk = dynamic_len * 3 // Schätzwert für Weekly Länge
     if last_low_idx_wk != 0
         float max_h_wk = -1.0
         int p_bar_wk = bar_index
@@ -68,11 +81,26 @@ if not na(p_low_wk)
         float finished_peak_pct_wk = (p_bar_wk - last_low_idx_wk) / dynamic_len_wk
         color tri_col_wk = finished_peak_pct_wk < 0.5 ? color.red : color.green
         
-        // Dreieck sehr deutlich tiefer als Daily (Etage 2: ATR * 4.5 für saubere Trennung)
-        label.new(bar_index - 30, low[30] - nz(ta.atr(14)[30]) * 4.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.normal)
+        // Zeichne Weekly Dreieck
+        label lbl_w = label.new(bar_index - p_len_w, low[p_len_w] - nz(ta.atr(14)[p_len_w]) * 4.5, text="W", style=label.style_triangleup, color=tri_col_wk, textcolor=color.white, size=size.small)
+        
+        // 3-Zyklen Limit Logik
+        array.push(w_triangles, lbl_w)
+        if array.size(w_triangles) > 3
+            label.delete(array.shift(w_triangles))
+            
     last_low_idx_wk := bar_index
 
-// --- 4. PEAK-POSITION & TRANSLATION ANALYSIS ---
+// --- MACRO ENGINE (Der Fix für Dez 2022) ---
+int macro_pivot_len = math.max(50, math.round(150 * tf_scale)) // Strukturelles Tief (ca. 6-9 Monate intakt)
+p_macro = ta.pivotlow(low, macro_pivot_len, macro_pivot_len)
+var int last_macro_idx = na
+
+if not na(p_macro)
+    last_macro_idx := bar_index - macro_pivot_len
+    label.new(last_macro_idx, low[macro_pivot_len] - nz(ta.atr(14)[macro_pivot_len]) * 8.0, text="MACRO", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.normal)
+
+// --- PEAK & VETO LOGIC ---
 bars_since_low = bar_index - last_low_idx
 high_since_low = ta.highest(high, math.max(1, bars_since_low))
 int peak_bar = na
@@ -80,50 +108,34 @@ for i = 0 to bars_since_low
     if high[i] == high_since_low
         peak_bar := bar_index - i
         break
+float peak_pos_pct = last_low_idx != 0 ? (peak_bar - last_low_idx) / dynamic_len : 0.0
 
-float peak_pos_pct = (peak_bar - last_low_idx) / dynamic_len
-
-// --- 5. SNIPER PHYSICS & VETO SYSTEM ---
 rsi2 = ta.rsi(close, 2)
 ema8 = ta.ema(close, 8)
 [_, _, bb_l4] = ta.bb(close, 20, 4)
-rel_vol = (volume / ta.sma(volume, 20)) * 100
-
 is_falling_knife = ((ta.change(close) / ta.atr(14)) * -1) > 2.2
 lookback = 5
 rel_weakness_veto = (asset_type == "D" or asset_type == "C") and (ta.roc(under_price, lookback) > 1.0) and (ta.roc(close, lookback) < 0.2)
 bond_panic_ok = asset_type == "F" ? move > 110 : true
 
-// --- 6. TRIGGER LOGIK & ALERTS ---
 in_window = bars_since_low > dynamic_len * 0.8 and bars_since_low < dynamic_len * 1.2
 strike_t3 = in_window and close < bb_l4 and not is_falling_knife and not rel_weakness_veto and bond_panic_ok
 
 if strike_t3
-    alert(syminfo.ticker + "; " + str.tostring(close) + "; T3 STRIKE; " + str.tostring(peak_pos_pct*100, "#") + "%", alert.freq_once_per_bar)
+    alert(syminfo.ticker + "; T3 STRIKE; " + str.tostring(peak_pos_pct*100, "#") + "%", alert.freq_once_per_bar)
 
-bool lt_warning = bars_since_low > dynamic_len * 0.5 and peak_pos_pct < 0.45 and ta.crossunder(close, ema8)
-if lt_warning
-    alert("VORSICHT: " + syminfo.ticker + " Left Translated (" + (peak_pos_pct < 0.5 ? "bärisch" : "bullisch") + ")! Peak bei " + str.tostring(peak_pos_pct*100, "#") + "%.", alert.freq_once_per_bar)
-
-// --- 7. VISUALISIERUNG (LABELS & DASHBOARD) ---
+// --- VISUALISIERUNG & DASHBOARD ---
 inst_absorption = (volume > ta.sma(volume, 50) * 1.8) and (high - low < ta.sma(high - low, 50) * 0.8)
 bgcolor(inst_absorption ? color.new(color.purple, 90) : na)
 
-// Peak Label Tracker (Schwebender Diamant)
 if ta.change(peak_bar) != 0
-    // Farben: Fuchsia (Magenta) für LT, Aqua (Cyan) für RT
     color trans_col = peak_pos_pct < 0.5 ? color.fuchsia : color.aqua
-    
-    // Smart-Filter für Extreme: Nur bei < 25% oder > 120% wird die Zahl eingeblendet
     bool is_outlier = peak_pos_pct < 0.25 or peak_pos_pct > 1.2
     string peak_text = "◆" + (is_outlier ? "\n" + str.tostring(peak_pos_pct * 100, "#") + "%" : "")
-    
-    // Position etwas über dem Docht
     float peak_atr = nz(ta.atr(14)[bar_index - peak_bar])
     float label_y = high_since_low + (peak_atr * 0.5)
     
     if na(current_peak_lbl)
-        // style_none macht den Hintergrund unsichtbar!
         current_peak_lbl := label.new(peak_bar, label_y, peak_text, color=color.new(color.white, 100), textcolor=trans_col, style=label.style_none, size=size.normal)
     else
         label.set_xy(current_peak_lbl, peak_bar, label_y)
@@ -133,10 +145,6 @@ if ta.change(peak_bar) != 0
 if strike_t3
     label.new(bar_index, low, "STRIKE T3\n" + asset_type, color=color.green, textcolor=color.white, style=label.style_label_up)
 
-if rel_weakness_veto
-    label.new(bar_index, high, "VETO: Rel. Schwäche\n(Partial Exit prüfen)", color=color.orange, textcolor=color.black, style=label.style_label_down)
-
-// Dashboard (Hier bleiben ALLE Infos sichtbar!)
 var table db = table.new(position.top_right, 1, 1, border_width=1)
 if barstate.islast
     string dash_trans = peak_pos_pct < 0.5 ? " (LT)" : " (RT)"
@@ -147,6 +155,18 @@ if barstate.islast
           "VIX: " + str.tostring(vix, "#.#") + " | MOVE: " + str.tostring(move, "#.#")
     table.cell(db, 0, 0, msg, bgcolor=color.silver, text_color=color.black, text_size=size.small)
 
-// Cycle Box
+// --- PROGNOSE BOXEN (Neu kalibriert) ---
+// Daily Cycle Box (Transparent: 85)
 if not na(last_low_idx) and bar_index < last_low_idx + dynamic_len * 1.2
-    box.new(last_low_idx + math.round(dynamic_len * 0.85), high * 1.02, last_low_idx + math.round(dynamic_len * 1.15), low * 0.98, bgcolor=color.new(color.gray, 95), border_style=line.style_dotted)
+    box.new(last_low_idx + math.round(dynamic_len * 0.85), high * 1.02, last_low_idx + math.round(dynamic_len * 1.15), low * 0.98, bgcolor=color.new(color.blue, 85), border_style=line.style_dotted)
+
+// Weekly Cycle Box (Kräftiger: 50)
+if not na(last_low_idx_wk) and bar_index < last_low_idx_wk + dynamic_len_wk * 1.2
+    box.new(last_low_idx_wk + math.round(dynamic_len_wk * 0.85), high * 1.05, last_low_idx_wk + math.round(dynamic_len_wk * 1.15), low * 0.95, bgcolor=color.new(color.blue, 50), border_style=line.style_dashed)
+
+// Macro Target Prognose
+if barstate.islast and not na(last_macro_idx)
+    int macro_len_bars = math.round(macro_years * 252 * tf_scale)
+    int next_macro_idx = last_macro_idx + macro_len_bars
+    if next_macro_idx > bar_index
+        label.new(next_macro_idx, low, "MACRO", style=label.style_arrowup, color=color.yellow, textcolor=color.black, size=size.small)
