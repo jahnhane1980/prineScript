@@ -1,10 +1,11 @@
 //@version=5
-indicator("AI Script: Macro-Handshake V52.0 (Clean Dots)", overlay=true)
+indicator("AI Script: Macro-Handshake V52.4 (Clean Dots)", overlay=true)
 
 // ==========================================
 // SCHRITT 1: INPUTS
 // ==========================================
-sma20_len  = input.int(20, "SMA 20 (Rettung)", minval=5)
+sma20_len  = input.int(20, "SMA Normal (Rettung)", minval=5)
+sma10_len  = input.int(10, "SMA Aggressiv (Parabolisch)", minval=1)
 sma50_len  = input.int(50, "SMA 50 (Decke)", minval=10)
 sma200_len = input.int(200, "SMA 200 (Anker)", minval=100)
 atr_mult   = input.float(2.0, "ATR Puffer (Boden)", step=0.1)
@@ -14,10 +15,24 @@ dev_buy    = input.float(-30.0, "Kauf-Zone (Abstand %)", step=5.0)
 dev_sell   = input.float(50.0, "Gier-Zone (Abstand %)", step=5.0)
 vol_mult   = input.float(2.0, "Volumen-Climax Multiplikator", step=0.1)
 
+// Parabolik-Schalter (Dynamische Notbremse)
+para_mode  = input.string("Konzept A (Rate of Change)", "Parabolik-Schalter", options=["Konzept A (Rate of Change)", "Konzept B (Gier-Zone)", "Konzept C (Momentum)"])
+roc_length = input.int(5, "A: ROC Länge (Tage)", group="Parabolik Settings")
+roc_limit  = input.float(15.0, "A: ROC Schwelle %", step=1.0, group="Parabolik Settings")
+mom_length = input.int(5, "C: Momentum SMA Länge", group="Parabolik Settings")
+mom_limit  = input.float(3.0, "C: Momentum Schwelle %", step=0.1, group="Parabolik Settings")
+
+// Zusatz-Indikatoren (Neongrüne Linie)
+neon_atr_mult   = input.float(1.5, "Neon-Linie ATR Abstand", step=0.1, group="Zusatz-Indikatoren")
+neon_smooth_len = input.int(3, "Neon-Linie Glättung (Tage)", minval=1, group="Zusatz-Indikatoren")
+
 // ==========================================
 // SCHRITT 2: MTF-LOGIK (Daily Data)
 // ==========================================
-[d_close, d_high, d_low, d_sma20, d_sma50H, d_sma50L, d_sma200, d_atr, d_vol_avg] = request.security(syminfo.tickerid, "1D", [close, high, low, ta.sma(close, sma20_len), ta.sma(high, sma50_len), ta.sma(low, sma50_len), ta.sma(close, sma200_len), ta.atr(14), ta.sma(volume, 20)])
+// Aufgeteilt in zwei Abfragen für sichere und saubere Datenübergabe. 
+[d_close, d_high, d_low, d_vol, d_sma20_normal, d_sma10_aggressiv, d_sma50H, d_sma50L, d_sma200, d_atr] = request.security(syminfo.tickerid, "1D", [close, high, low, volume, ta.sma(low, sma20_len), ta.sma(high, sma10_len), ta.sma(high, sma50_len), ta.sma(low, sma50_len), ta.sma(close, sma200_len), ta.atr(14)])
+
+[d_vol_avg, d_roc, d_mom_sma, d_mom_sma_prev] = request.security(syminfo.tickerid, "1D", [ta.sma(volume, 20), ta.roc(close, roc_length), ta.sma(close, mom_length), ta.sma(close, mom_length)[1]])
 
 // ==========================================
 // SCHRITT 3: LOGIK-BERECHNUNGEN
@@ -25,18 +40,49 @@ vol_mult   = input.float(2.0, "Volumen-Climax Multiplikator", step=0.1)
 decke  = d_sma50H
 boden  = d_sma50L - (d_atr * atr_mult)
 anker  = d_sma200
-rescue = d_sma20
 
-deviation = ((close - anker) / anker) * 100
+// Neongrüne ATR-Linie (Verschoben vom Schlusskurs und geglättet)
+// Wir berechnen erst den rohen Wert und glätten ihn dann über den gewünschten Zeitraum
+raw_neon_line = d_close - (d_atr * neon_atr_mult)
+neon_line     = ta.sma(raw_neon_line, neon_smooth_len)
+
+// Berechnung zwingend auf d_close umgestellt
+deviation = ((d_close - anker) / anker) * 100
+
+// Parabolik-Trigger prüfen
+trigger_para = false
+if para_mode == "Konzept A (Rate of Change)"
+    trigger_para := d_roc > roc_limit
+else if para_mode == "Konzept B (Gier-Zone)"
+    trigger_para := deviation >= dev_sell
+else if para_mode == "Konzept C (Momentum)"
+    trigger_para := ((d_mom_sma - d_mom_sma_prev) / d_mom_sma_prev) * 100 > mom_limit
+
+// EINRAST-FUNKTION (Latch-Logik) Verhindert das Hin- und Herspringen
+var bool is_para_mode = false
+if trigger_para
+    is_para_mode := true
+
+// Reset: Wenn der Kurs die alte, trägere Notbremse (SMA 20 auf Low) unterschreitet
+if d_close < d_sma20_normal
+    is_para_mode := false
+
+// Dynamischer Wechsel der Berechnungs-Variable für das Signal
+rescue = is_para_mode ? d_sma10_aggressiv : d_sma20_normal
 
 // 1. BLAU: Akkumulation (Absorption am Boden)
-is_buy_climax = (deviation <= dev_buy) and (volume > d_vol_avg * vol_mult) and (close > low + (high - low) * 0.4)
+is_buy_climax = (deviation <= dev_buy) and (d_vol > d_vol_avg * vol_mult) and (d_close > d_low + (d_high - d_low) * 0.4)
 
 // 2. ROT: Distribution (Blow-off am Top)
-is_sell_climax = (deviation >= dev_sell) and (volume > d_vol_avg * vol_mult) and (close < high - (high - low) * 0.4)
+is_sell_climax = (deviation >= dev_sell) and (d_vol > d_vol_avg * vol_mult) and (d_close < d_high - (d_high - d_low) * 0.4)
 
-// 3. ORANGE: Notbremse (SMA 20 Bruch in Gier-Zone)
-is_rescue_exit = (deviation >= dev_sell * 0.6) and (close < rescue)
+// 3. ORANGE (jetzt Pink): Notbremse (Dynamischer SMA Bruch in Gier-Zone)
+is_rescue_exit = (deviation >= dev_sell * 0.6) and (d_close < rescue)
+
+// Zähler-Logik: Begrenzung auf maximal 4 aufeinanderfolgende orangene/pinke Punkte
+var int rescue_streak = 0
+rescue_streak := is_rescue_exit ? rescue_streak + 1 : 0
+show_rescue_exit = is_rescue_exit and (rescue_streak <= 4)
 
 // ==========================================
 // SCHRITT 4: VISUALISIERUNG (Dezente Punkte)
@@ -46,11 +92,12 @@ is_rescue_exit = (deviation >= dev_sell * 0.6) and (close < rescue)
 // Blau = Akkumulation
 plotshape(is_buy_climax, "Akkumulation (Buy)", style=shape.circle, location=location.belowbar, color=color.new(#0000FF, 0), size=size.tiny, offset=0)
 
-// Rot = Distribution
-plotshape(is_sell_climax, "Distribution (Sell)", style=shape.circle, location=location.belowbar, color=color.new(#FF0000, 0), size=size.tiny, offset=1)
+// Rot = Distribution (Neue Farbe)
+plotshape(is_sell_climax, "Distribution (Sell)", style=shape.diamond, location=location.belowbar, color=color.new(#852e6b, 0), size=size.tiny, offset=1)
 
-// Orange = Notbremse
-plotshape(is_rescue_exit, "Rettung (SMA 20)", style=shape.circle, location=location.belowbar, color=color.new(#FF4500, 0), size=size.tiny, offset=2)
+// --- SIGNAL ÜBER DEM CHART ---
+// Pink = Notbremse (max. 4 Punkte in Folge, Neue Farbe)
+plotshape(show_rescue_exit, "Rettung (Dynamisch)", style=shape.circle, location=location.abovebar, color=color.new(#be4299, 0), size=size.tiny, offset=0)
 
 
 // --- BESTEHENDE SMA & KORRIDOR LOGIK ---
@@ -59,7 +106,12 @@ p_low  = plot(boden, "Daily SMA 50 Boden", color=color.new(#FF4500, 10), linewid
 fill(p_high, p_low, color=(close > boden ? color.new(#00FF00, 92) : color.new(#FFA500, 94)), title="Corridor Fill")
 
 plot(anker, "Daily SMA 200 Anker", color=color.new(#808080, 50), linewidth=3)
-plot(rescue, "SMA 20 Notbremse", color=color.new(#FF4500, 40), linewidth=1, style=plot.style_linebr)
+
+// ZUSATZ: Neongrüne ATR-Linie (Geglättet)
+plot(neon_line, "ATR Abstand (Neon)", color=color.new(#39FF14, 15), linewidth=2)
+
+// Darstellung der dynamischen Notbremse (Weiß, durchgehend, einheitliche Dicke)
+plot(rescue, "SMA Notbremse (Dynamisch)", color=color.new(#FFFFFF, 40), linewidth=1)
 
 // Label für aktuelle Abweichung (rechts am Rand)
 if barstate.islast
