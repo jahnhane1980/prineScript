@@ -26,6 +26,9 @@ mom_limit  = input.float(3.0, "C: Momentum Schwelle %", step=0.1, group="Parabol
 neon_atr_mult   = input.float(1.5, "Neon-Linie ATR Abstand", step=0.1, group="Zusatz-Indikatoren")
 neon_smooth_len = input.int(3, "Neon-Linie Glättung (Tage)", minval=1, group="Zusatz-Indikatoren")
 
+// ZigZag Einstellungen
+zz_len = input.int(10, "ZigZag Länge (Daily)", minval=1, group="SCHRITT 5: ZigZag")
+
 // ==========================================
 // SCHRITT 2: MTF-LOGIK (Daily Data)
 // ==========================================
@@ -116,3 +119,59 @@ plot(rescue, "SMA Notbremse (Dynamisch)", color=color.new(#FFFFFF, 40), linewidt
 // Label für aktuelle Abweichung (rechts am Rand)
 if barstate.islast
     label.new(bar_index, anker, "Dist: " + str.tostring(deviation, "#.#") + "%", style=label.style_label_left, color=color.new(color.gray, 50), textcolor=color.white, size=size.small)
+
+// ==========================================
+// SCHRITT 5: ZIGZAG STRUKTUR (Daily)
+// ==========================================
+ph = ta.pivothigh(d_high, zz_len, zz_len)
+pl = ta.pivotlow(d_low, zz_len, zz_len)
+
+var float last_zz_val  = na
+var int   last_zz_idx  = na
+var bool  last_zz_high = na
+var line  zz_line      = na
+
+// Hilfsvariablen für den vorherigen Pivot
+var float prev_zz_val  = na
+var int   prev_zz_idx  = na
+
+// Logik für abwechselnde Hochs und Tiefs
+if ph
+    if na(last_zz_high) or not last_zz_high
+        // Richtungswechsel: Neues Hoch bestätigt
+        prev_zz_val  := last_zz_val
+        prev_zz_idx  := last_zz_idx
+        last_zz_val  := ph
+        last_zz_idx  := bar_index[zz_len]
+        last_zz_high := true
+        
+        if not na(prev_zz_idx)
+            zz_line := line.new(prev_zz_idx, prev_zz_val, last_zz_idx, last_zz_val, color=color.new(color.gray, 50), style=line.style_dashed)
+    else if ph > last_zz_val
+        // Trendfortsetzung: Höheres Hoch -> Bestehende Linie anpassen
+        last_zz_val := ph
+        last_zz_idx := bar_index[zz_len]
+        if not na(zz_line)
+            line.set_xy2(zz_line, last_zz_idx, last_zz_val)
+
+if pl
+    if na(last_zz_high) or last_zz_high
+        // Richtungswechsel: Neues Tief bestätigt
+        prev_zz_val  := last_zz_val
+        prev_zz_idx  := last_zz_idx
+        last_zz_val  := pl
+        last_zz_idx  := bar_index[zz_len]
+        last_zz_high := false
+        
+        if not na(prev_zz_idx)
+            zz_line := line.new(prev_zz_idx, prev_zz_val, last_zz_idx, last_zz_val, color=color.new(color.gray, 50), style=line.style_dashed)
+    else if pl < last_zz_val
+        // Trendfortsetzung: Tieferes Tief -> Bestehende Linie anpassen
+        last_zz_val := pl
+        last_zz_idx := bar_index[zz_len]
+        if not na(zz_line)
+            line.set_xy2(zz_line, last_zz_idx, last_zz_val)
+
+// Shapes zeichnen (mit Offset um zz_len zurück, da erst dann bestätigt)
+plotshape(ph, "Pivot High", shape.triangledown, location.abovebar, color.yellow, offset=-zz_len, size=size.small)
+plotshape(pl, "Pivot Low", shape.triangleup, location.belowbar, color.yellow, offset=-zz_len, size=size.small)
