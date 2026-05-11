@@ -21,6 +21,7 @@ roc_length = input.int(5, "A: ROC Länge (Tage)", group="Parabolik Settings")
 roc_limit  = input.float(15.0, "A: ROC Schwelle %", step=1.0, group="Parabolik Settings")
 mom_length = input.int(5, "C: Momentum SMA Länge", group="Parabolik Settings")
 mom_limit  = input.float(3.0, "C: Momentum Schwelle %", step=0.1, group="Parabolik Settings")
+chand_pct  = input.float(10.0, "Sicherheitsgurt Abstand vom Top (%)", step=0.5, group="Parabolik Settings")
 
 // Zusatz-Indikatoren (Neongrüne Linie)
 neon_atr_mult   = input.float(1.5, "Neon-Linie ATR Abstand", step=0.1, group="Zusatz-Indikatoren")
@@ -80,7 +81,14 @@ is_buy_climax = (deviation <= dev_buy) and (d_vol > d_vol_avg * vol_mult) and (d
 is_sell_climax = (deviation >= dev_sell) and (d_vol > d_vol_avg * vol_mult) and (d_close < d_high - (d_high - d_low) * 0.4)
 
 // 3. ORANGE (jetzt Pink): Notbremse (Dynamischer SMA Bruch in Gier-Zone)
-is_rescue_exit = (deviation >= dev_sell * 0.6) and (d_close < rescue)
+var float peak_high = na
+if is_para_mode
+    peak_high := na(peak_high) ? high : math.max(peak_high, high)
+else
+    peak_high := na
+
+chand_stop = peak_high * (1 - (chand_pct / 100))
+is_rescue_exit = is_para_mode and (close < chand_stop)
 
 // Zähler-Logik: Begrenzung auf maximal 4 aufeinanderfolgende orangene/pinke Punkte
 var int rescue_streak = 0
@@ -94,6 +102,7 @@ show_rescue_exit = is_rescue_exit and (rescue_streak <= 4)
 // --- SIGNAL ÜBER DEM CHART ---
 // Pink = Notbremse (max. 4 Punkte in Folge, Neue Farbe)
 plotshape(show_rescue_exit, "Rettung (Dynamisch)", style=shape.circle, location=location.abovebar, color=color.new(color.white, 0), size=size.tiny, offset=0)
+plot(is_para_mode ? chand_stop : na, "Chandelier Gurt", color=color.new(color.red, 20), style=plot.style_cross, linewidth=1)
 
 
 // --- BESTEHENDE SMA & KORRIDOR LOGIK ---
