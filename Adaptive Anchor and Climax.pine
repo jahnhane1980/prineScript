@@ -1,5 +1,5 @@
 //@version=5
-indicator("Macro Sentinel: Adaptive Anchor & Climax", overlay=true)
+indicator("Macro Sentinel: Adaptive Anchor & Climax", overlay=true, max_lines_count=500, max_labels_count=500)
 
 // ==========================================
 // SCHRITT 1: INPUTS
@@ -28,12 +28,12 @@ neon_atr_mult   = input.float(1.5, "Neon-Linie ATR Abstand", step=0.1, group="Zu
 neon_smooth_len = input.int(3, "Neon-Linie Glättung (Tage)", minval=1, group="Zusatz-Indikatoren")
 
 // ZigZag Einstellungen
-zz_len = input.int(10, "ZigZag Länge (Daily)", minval=1, group="SCHRITT 5: ZigZag")
+zz_len      = input.int(10, "ZigZag Länge (Basis)", minval=1, group="SCHRITT 5: ZigZag")
 
 // ==========================================
 // SCHRITT 2: MTF-LOGIK (Daily Data)
 // ==========================================
-// Aufgeteilt in zwei Abfragen für sichere und saubere Datenübergabe. 
+// Alle relevanten SMAs und ATRs werden fest auf Tagesbasis ("1D") abgefragt.
 [d_close, d_high, d_low, d_vol, d_sma20_normal, d_sma10_aggressiv, d_sma50H, d_sma50L, d_sma200, d_atr] = request.security(syminfo.tickerid, "1D", [close, high, low, volume, ta.sma(low, sma20_len), ta.sma(high, sma10_len), ta.sma(high, sma50_len), ta.sma(low, sma50_len), ta.sma(close, sma200_len), ta.atr(14)])
 
 [d_vol_avg, d_roc, d_mom_sma, d_mom_sma_prev] = request.security(syminfo.tickerid, "1D", [ta.sma(volume, 20), ta.roc(close, roc_length), ta.sma(close, mom_length), ta.sma(close, mom_length)[1]])
@@ -46,11 +46,10 @@ boden  = d_sma50L - (d_atr * atr_mult)
 anker  = d_sma200
 
 // Neongrüne ATR-Linie (Verschoben vom Schlusskurs und geglättet)
-// Wir berechnen erst den rohen Wert und glätten ihn dann über den gewünschten Zeitraum
 raw_neon_line = d_close[1] - (d_atr[1] * neon_atr_mult)
 neon_line     = ta.sma(raw_neon_line, neon_smooth_len)
 
-// Berechnung zwingend auf d_close umgestellt
+// Abweichung vom Anker
 deviation = ((d_close - anker) / anker) * 100
 
 // Parabolik-Trigger prüfen
@@ -62,25 +61,21 @@ else if para_mode == "Konzept B (Gier-Zone)"
 else if para_mode == "Konzept C (Momentum)"
     trigger_para := ((d_mom_sma - d_mom_sma_prev) / d_mom_sma_prev) * 100 > mom_limit
 
-// EINRAST-FUNKTION (Latch-Logik) Verhindert das Hin- und Herspringen
+// EINRAST-FUNKTION (Latch-Logik)
 var bool is_para_mode = false
 if trigger_para
     is_para_mode := true
 
-// Reset: Wenn der Kurs die alte, trägere Notbremse (SMA 20 auf Low) unterschreitet
 if d_close < d_sma20_normal
     is_para_mode := false
 
-// Dynamischer Wechsel der Berechnungs-Variable für das Signal
 rescue = is_para_mode ? d_sma10_aggressiv : d_sma20_normal
 
-// 1. BLAU: Akkumulation (Absorption am Boden)
+// Climax Signale
 is_buy_climax = (deviation <= dev_buy) and (d_vol > d_vol_avg * vol_mult) and (d_close > d_low + (d_high - d_low) * 0.4)
-
-// 2. ROT: Distribution (Blow-off am Top)
 is_sell_climax = (deviation >= dev_sell) and (d_vol > d_vol_avg * vol_mult) and (d_close < d_high - (d_high - d_low) * 0.4)
 
-// 3. ORANGE (jetzt Pink): Notbremse (Dynamischer SMA Bruch in Gier-Zone)
+// Chandelier Stop (Lokale Berechnung für Reaktionsschnelligkeit)
 var float peak_high = na
 if is_para_mode
     peak_high := na(peak_high) ? high : math.max(peak_high, high)
@@ -90,93 +85,76 @@ else
 chand_stop = peak_high * (1 - (chand_pct / 100))
 is_rescue_exit = is_para_mode and (close < chand_stop)
 
-// Zähler-Logik: Begrenzung auf maximal 4 aufeinanderfolgende orangene/pinke Punkte
 var int rescue_streak = 0
 rescue_streak := is_rescue_exit ? rescue_streak + 1 : 0
 show_rescue_exit = is_rescue_exit and (rescue_streak <= 4)
 
 // ==========================================
-// SCHRITT 4: VISUALISIERUNG (Dezente Punkte)
+// SCHRITT 4: VISUALISIERUNG
 // ==========================================
-
-// --- SIGNAL ÜBER DEM CHART ---
-// Pink = Notbremse (max. 4 Punkte in Folge, Neue Farbe)
 plotshape(show_rescue_exit, "Rettung (Dynamisch)", style=shape.circle, location=location.abovebar, color=color.new(color.white, 0), size=size.tiny, offset=0)
 plot(is_para_mode ? chand_stop : na, "Chandelier Gurt", color=color.new(color.red, 20), style=plot.style_cross, linewidth=1)
 
-
-// --- BESTEHENDE SMA & KORRIDOR LOGIK ---
 p_high = plot(decke, "Daily SMA 50 Decke", color=color.new(#FFA500, 30))
 p_low  = plot(boden, "Daily SMA 50 Boden", color=color.new(#FF4500, 10), linewidth=2)
 fill(p_high, p_low, color=(close > boden ? color.new(#00FF00, 92) : color.new(#FFA500, 94)), title="Corridor Fill")
 
 plot(anker, "Daily SMA 200 Anker", color=color.new(#808080, 50), linewidth=3)
-
-// ZUSATZ: Neongrüne ATR-Linie (Geglättet)
 plot(neon_line, "ATR Abstand (Neon)", color=color.new(#39FF14, 15), linewidth=2)
-
-// Darstellung der dynamischen Notbremse (Weiß, durchgehend, einheitliche Dicke)
 plot(rescue, "SMA Notbremse (Dynamisch)", color=color.new(#FFFFFF, 40), linewidth=1)
 
-// Label für aktuelle Abweichung (rechts am Rand)
 if barstate.islast
     label.new(bar_index, anker, "Dist: " + str.tostring(deviation, "#.#") + "%", style=label.style_label_left, color=color.new(color.gray, 50), textcolor=color.white, size=size.small)
 
 // ==========================================
-// SCHRITT 5: ZIGZAG STRUKTUR (Daily)
+// SCHRITT 5: ZIGZAG STRUKTUR (Daily MTF)
 // ==========================================
-ph = ta.pivothigh(d_high, zz_len, zz_len)
-pl = ta.pivotlow(d_low, zz_len, zz_len)
+// Abfrage der Tages-Pivots mit Zeitstempel für präzise Zeichnung
+[ph, ph_time] = request.security(syminfo.tickerid, "1D", [ta.pivothigh(high, 10, 10), time[10]], gaps=barmerge.gaps_on)
+[pl, pl_time] = request.security(syminfo.tickerid, "1D", [ta.pivotlow(low, 10, 10), time[10]], gaps=barmerge.gaps_on)
 
 var float last_zz_val  = na
-var int   last_zz_idx  = na
+var int   last_zz_time = na
 var bool  last_zz_high = na
 var line  zz_line      = na
 
 // Hilfsvariablen für den vorherigen Pivot
 var float prev_zz_val  = na
-var int   prev_zz_idx  = na
+var int   prev_zz_time = na
 
-// Logik für abwechselnde Hochs und Tiefs
 if ph
     if na(last_zz_high) or not last_zz_high
-        // Richtungswechsel: Neues Hoch bestätigt
         prev_zz_val  := last_zz_val
-        prev_zz_idx  := last_zz_idx
+        prev_zz_time := last_zz_time
         last_zz_val  := ph
-        last_zz_idx  := bar_index[zz_len]
+        last_zz_time := ph_time
         last_zz_high := true
-        
-        if not na(prev_zz_idx)
-            zz_line := line.new(prev_zz_idx, prev_zz_val, last_zz_idx, last_zz_val, color=color.new(color.gray, 50), style=line.style_dashed)
+        if not na(prev_zz_time)
+            zz_line := line.new(prev_zz_time, prev_zz_val, last_zz_time, last_zz_val, xloc=xloc.bar_time, color=color.new(color.gray, 50), style=line.style_dashed)
     else if ph > last_zz_val
-        // Trendfortsetzung: Höheres Hoch -> Bestehende Linie anpassen
-        last_zz_val := ph
-        last_zz_idx := bar_index[zz_len]
+        last_zz_val  := ph
+        last_zz_time := ph_time
         if not na(zz_line)
-            line.set_xy2(zz_line, last_zz_idx, last_zz_val)
+            line.set_xy2(zz_line, last_zz_time, last_zz_val)
 
 if pl
     if na(last_zz_high) or last_zz_high
-        // Richtungswechsel: Neues Tief bestätigt
         prev_zz_val  := last_zz_val
-        prev_zz_idx  := last_zz_idx
+        prev_zz_time := last_zz_time
         last_zz_val  := pl
-        last_zz_idx  := bar_index[zz_len]
+        last_zz_time := pl_time
         last_zz_high := false
-        
-        if not na(prev_zz_idx)
-            zz_line := line.new(prev_zz_idx, prev_zz_val, last_zz_idx, last_zz_val, color=color.new(color.gray, 50), style=line.style_dashed)
+        if not na(prev_zz_time)
+            zz_line := line.new(prev_zz_time, prev_zz_val, last_zz_time, last_zz_val, xloc=xloc.bar_time, color=color.new(color.gray, 50), style=line.style_dashed)
     else if pl < last_zz_val
-        // Trendfortsetzung: Tieferes Tief -> Bestehende Linie anpassen
-        last_zz_val := pl
-        last_zz_idx := bar_index[zz_len]
+        last_zz_val  := pl
+        last_zz_time := pl_time
         if not na(zz_line)
-            line.set_xy2(zz_line, last_zz_idx, last_zz_val)
+            line.set_xy2(zz_line, last_zz_time, last_zz_val)
 
-// Shapes zeichnen (mit Offset um zz_len zurück, da erst dann bestätigt)
-plotshape(ph, "Pivot High", shape.triangledown, location.abovebar, color.yellow, offset=-zz_len, size=size.small)
-plotshape(pl, "Pivot Low", shape.triangleup, location.belowbar, color.yellow, offset=-zz_len, size=size.small)
+// Plots für die Pivots (erscheinen am Bestätigungsbalken)
+plotshape(ph, "Pivot High", shape.triangledown, location.abovebar, color.yellow, size=size.small)
+plotshape(pl, "Pivot Low", shape.triangleup, location.belowbar, color.yellow, size=size.small)
 
 // ==========================================
 // SCHRITT 6: AKKUMULATIONS- & DISTRIBUTIONS-ZONEN
@@ -185,6 +163,7 @@ var bool in_acc_zone = false
 if is_buy_climax and not in_acc_zone
     in_acc_zone := true
 
+// Struktur-Breakouts basierend auf MTF-Pivots
 last_ph = ta.valuewhen(not na(ph), ph, 0)
 speed_breakout = (d_close > decke) and (d_close[1] > decke[1]) and (d_close > d_close[1])
 struct_breakout = not na(last_ph) and (d_close > last_ph)
@@ -194,7 +173,6 @@ if in_acc_zone and (speed_breakout or struct_breakout)
 
 bgcolor(in_acc_zone ? color.new(color.blue, 60) : na, title='Akkumulations-Zone')
 
-// Distributions-Zone Logik
 var bool in_dist_zone = false
 if is_sell_climax and not in_dist_zone
     in_dist_zone := true
