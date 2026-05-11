@@ -46,7 +46,7 @@ anker  = d_sma200
 
 // Neongrüne ATR-Linie (Verschoben vom Schlusskurs und geglättet)
 // Wir berechnen erst den rohen Wert und glätten ihn dann über den gewünschten Zeitraum
-raw_neon_line = d_close - (d_atr * neon_atr_mult)
+raw_neon_line = d_close[1] - (d_atr[1] * neon_atr_mult)
 neon_line     = ta.sma(raw_neon_line, neon_smooth_len)
 
 // Berechnung zwingend auf d_close umgestellt
@@ -91,16 +91,9 @@ show_rescue_exit = is_rescue_exit and (rescue_streak <= 4)
 // SCHRITT 4: VISUALISIERUNG (Dezente Punkte)
 // ==========================================
 
-// --- SIGNALE UNTER DEM CHART ---
-// Blau = Akkumulation
-plotshape(is_buy_climax, "Akkumulation (Buy)", style=shape.circle, location=location.belowbar, color=color.new(#0000FF, 0), size=size.tiny, offset=0)
-
-// Rot = Distribution (Neue Farbe)
-plotshape(is_sell_climax, "Distribution (Sell)", style=shape.diamond, location=location.belowbar, color=color.new(#852e6b, 0), size=size.tiny, offset=1)
-
 // --- SIGNAL ÜBER DEM CHART ---
 // Pink = Notbremse (max. 4 Punkte in Folge, Neue Farbe)
-plotshape(show_rescue_exit, "Rettung (Dynamisch)", style=shape.circle, location=location.abovebar, color=color.new(#be4299, 0), size=size.tiny, offset=0)
+plotshape(show_rescue_exit, "Rettung (Dynamisch)", style=shape.circle, location=location.abovebar, color=color.new(color.white, 0), size=size.tiny, offset=0)
 
 
 // --- BESTEHENDE SMA & KORRIDOR LOGIK ---
@@ -175,3 +168,33 @@ if pl
 // Shapes zeichnen (mit Offset um zz_len zurück, da erst dann bestätigt)
 plotshape(ph, "Pivot High", shape.triangledown, location.abovebar, color.yellow, offset=-zz_len, size=size.small)
 plotshape(pl, "Pivot Low", shape.triangleup, location.belowbar, color.yellow, offset=-zz_len, size=size.small)
+
+// ==========================================
+// SCHRITT 6: AKKUMULATIONS- & DISTRIBUTIONS-ZONEN
+// ==========================================
+var bool in_acc_zone = false
+if is_buy_climax and not in_acc_zone
+    in_acc_zone := true
+
+last_ph = ta.valuewhen(not na(ph), ph, 0)
+speed_breakout = (d_close > decke) and (d_close[1] > decke[1]) and (d_close > d_close[1])
+struct_breakout = not na(last_ph) and (d_close > last_ph)
+
+if in_acc_zone and (speed_breakout or struct_breakout)
+    in_acc_zone := false
+
+bgcolor(in_acc_zone ? color.new(color.blue, 60) : na, title='Akkumulations-Zone')
+
+// Distributions-Zone Logik
+var bool in_dist_zone = false
+if is_sell_climax and not in_dist_zone
+    in_dist_zone := true
+
+last_pl = ta.valuewhen(not na(pl), pl, 0)
+dist_speed_breakout = (d_close < boden) and (d_close[1] < boden[1]) and (d_close < d_close[1])
+dist_struct_breakout = not na(last_pl) and (d_close < last_pl)
+
+if in_dist_zone and (dist_speed_breakout or dist_struct_breakout)
+    in_dist_zone := false
+
+bgcolor(in_dist_zone ? color.new(#852e6b, 70) : na, title='Distributions-Zone')
