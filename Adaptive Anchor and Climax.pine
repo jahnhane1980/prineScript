@@ -1,5 +1,5 @@
 //@version=5
-indicator("AI Script: Macro-Handshake V52.4 (Clean Dots)", overlay=true)
+indicator("Macro Sentinel: Adaptive Anchor & Climax", overlay=true)
 
 // ==========================================
 // SCHRITT 1: INPUTS

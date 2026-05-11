@@ -1,0 +1,67 @@
+//@version=5
+indicator("VPA: Smart Money & Climax Volume", overlay=false)
+
+// --- Einstellungen (Inputs) ---
+ma_length     = input.int(20, title="MA Länge", tooltip="Glättung des Volumens")
+dry_mult      = input.float(0.5, title="Faktor für Totenstille", tooltip="Volumen < 50% des Durchschnitts")
+climax_mult   = input.float(2.0, title="Faktor für Climax", tooltip="Volumen > 200% des Durchschnitts")
+breakout_mult = input.float(1.5, title="Faktor für Smart Money", tooltip="Volumen > 150% des Durchschnitts beim Ausbruch")
+trap_mult     = input.float(1.5, title="Faktor für Bull Trap", tooltip="Volumen > 150% des Durchschnitts bei Schwäche")
+absorb_mult   = input.float(1.5, title="Faktor für Absorption", tooltip="Volumen > 150% mit kleiner Kerzenspanne")
+
+// --- Basis-Berechnungen ---
+vol_ma = ta.sma(volume, ma_length)
+is_green = close >= open
+is_red = close < open
+
+// Analyse der Kerzen-Anatomie (Wo schließt der Preis im Verhältnis zur Tages-Spanne?)
+// 0.0 = Schließt exakt am Tief, 1.0 = Schließt exakt am Hoch
+candle_range = high - low
+close_pct = candle_range != 0 ? (close - low) / candle_range : 0
+avg_range = ta.sma(candle_range, ma_length) // NEU: Durchschnittliche Kerzenspanne der letzten 20 Tage
+
+// --- VPA Logik (Die Szenarien) ---
+
+// 1. Totenstille (Volumen extrem niedrig)
+is_dry = volume < (vol_ma * dry_mult)
+
+// 2. Selling Climax (Massives Volumen, roter Tag, aber Preis wird vom Tief hochgekauft -> Boden hält)
+is_climax = is_red and (volume > vol_ma * climax_mult) and (close_pct > 0.25)
+
+// 3. Smart Money Entry (Ausbruch aus der Stille)
+was_dry = is_dry[1] or is_dry[2] or is_dry[3]
+is_smart_money = is_green and (volume > vol_ma * breakout_mult) and was_dry
+
+// 4. Fake-Ausbruch / Bull Trap (Upthrust) - NEU
+// Hohes Volumen, Preis macht ein neues Hoch, schließt aber im unteren Viertel (langer oberer Docht)
+is_trap = (volume > vol_ma * trap_mult) and (close_pct < 0.25) and (high > high[1])
+
+// 5. Absorption an Widerständen (Squat) - NEU
+// Hohes Volumen, aber die Kerzenspanne ist kleiner als der Durchschnitt (Kampf auf engem Raum), schließt in der oberen Hälfte
+is_absorb = (volume > vol_ma * absorb_mult) and (candle_range < avg_range) and (close_pct >= 0.5)
+
+
+// --- Farben zuweisen ---
+base_color = is_green ? color.new(color.green, 60) : color.new(color.red, 60)
+bar_color = base_color
+
+if is_dry
+    bar_color := color.new(color.gray, 60)
+if is_climax
+    bar_color := color.new(color.fuchsia, 0)
+if is_smart_money
+    bar_color := color.new(color.aqua, 0)
+if is_trap
+    bar_color := color.new(color.orange, 0)
+if is_absorb
+    bar_color := color.new(color.blue, 0)
+
+// --- Zeichnen (Plots) ---
+plot(volume, style=plot.style_columns, color=bar_color, title="Volume")
+plot(vol_ma, color=color.orange, linewidth=2, title="Volume Average")
+
+// --- Labels für eindeutige Signale ---
+plotshape(is_climax ? volume : na, style=shape.labeldown, location=location.absolute, color=color.fuchsia, text="CLIMAX", textcolor=color.white, size=size.tiny, title="Climax Label")
+plotshape(is_smart_money ? volume : na, style=shape.labelup, location=location.absolute, color=color.aqua, text="BUY", textcolor=color.black, size=size.tiny, title="Smart Money Label")
+plotshape(is_trap ? volume : na, style=shape.labeldown, location=location.absolute, color=color.orange, text="TRAP", textcolor=color.white, size=size.tiny, title="Trap Label")
+plotshape(is_absorb ? volume : na, style=shape.labelup, location=location.absolute, color=color.blue, text="ABSORB", textcolor=color.white, size=size.tiny, title="Absorb Label")
