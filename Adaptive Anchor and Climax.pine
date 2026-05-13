@@ -2,6 +2,13 @@
 indicator("Macro Sentinel: Adaptive Anchor & Climax", overlay=true, max_lines_count=500, max_labels_count=500)
 
 // ==========================================
+// SICHERHEITS-EINSTELLUNGEN
+// ==========================================
+// Schutz gegen das 5000-Bar-Limit von Pine Script
+MAX_LOOKBACK = 4999
+is_within_limit = (last_bar_index - bar_index) < MAX_LOOKBACK
+
+// ==========================================
 // SCHRITT 1: INPUTS
 // ==========================================
 sma20_len  = input.int(20, "SMA Normal (Rettung)", minval=5)
@@ -164,24 +171,32 @@ if is_buy_climax and not in_acc_zone
     in_acc_zone := true
 
 // Struktur-Breakouts basierend auf MTF-Pivots
-last_ph = ta.valuewhen(not na(ph), ph, 0)
+// Sicherung: State-Tracking statt ta.valuewhen
+var float last_ph = na
+if not na(ph)
+    last_ph := ph
+
 speed_breakout = (d_close > decke) and (d_close[1] > decke[1]) and (d_close > d_close[1])
 struct_breakout = not na(last_ph) and (d_close > last_ph)
 
 if in_acc_zone and (speed_breakout or struct_breakout)
     in_acc_zone := false
 
-bgcolor(in_acc_zone ? color.new(color.blue, 60) : na, title='Akkumulations-Zone')
+bgcolor(is_within_limit and in_acc_zone ? color.new(color.blue, 60) : na, title='Akkumulations-Zone')
 
 var bool in_dist_zone = false
 if is_sell_climax and not in_dist_zone
     in_dist_zone := true
 
-last_pl = ta.valuewhen(not na(pl), pl, 0)
+// Sicherung: State-Tracking statt ta.valuewhen
+var float last_pl = na
+if not na(pl)
+    last_pl := pl
+
 dist_speed_breakout = (d_close < boden) and (d_close[1] < boden[1]) and (d_close < d_close[1])
 dist_struct_breakout = not na(last_pl) and (d_close < last_pl)
 
 if in_dist_zone and (dist_speed_breakout or dist_struct_breakout)
     in_dist_zone := false
 
-bgcolor(in_dist_zone ? color.new(#852e6b, 70) : na, title='Distributions-Zone')
+bgcolor(is_within_limit and in_dist_zone ? color.new(#852e6b, 70) : na, title='Distributions-Zone')
